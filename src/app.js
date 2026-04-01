@@ -639,6 +639,10 @@ function wireEventListeners() {
   const clearBtn = document.getElementById('clear-data');
   if (clearBtn) clearBtn.addEventListener('click', handleClearData);
 
+  // Local model switch
+  const switchModelBtn = document.getElementById('switch-model-btn');
+  if (switchModelBtn) switchModelBtn.addEventListener('click', handleSwitchModel);
+
   // Cloud provider dropdown
   const cloudProvider = document.getElementById('cloud-provider');
   if (cloudProvider) cloudProvider.addEventListener('change', handleProviderChange);
@@ -817,6 +821,15 @@ async function updateSettingsView() {
 
   ui.updateTrustDashboard(state.mode, cloudCalls, modelName, convCount);
 
+  // Restore saved local model selection
+  if (memoryReady) {
+    try {
+      const savedModel = await memory.getPreference('selected_model');
+      const modelPicker = document.getElementById('local-model-picker');
+      if (savedModel && modelPicker) modelPicker.value = savedModel;
+    } catch {}
+  }
+
   // Restore saved cloud provider
   if (memoryReady) {
     try {
@@ -885,6 +898,53 @@ function handleNewChat() {
   state.messages = [];
   ui.clearMessages();
   ui.showNotification('New conversation');
+}
+
+/**
+ * Switch local model — downloads new model on demand
+ */
+async function handleSwitchModel() {
+  const picker = document.getElementById('local-model-picker');
+  const hint = document.getElementById('local-model-hint');
+  const btn = document.getElementById('switch-model-btn');
+  if (!picker) return;
+
+  const modelId = picker.value;
+  const currentModel = engine.getStatus().modelId;
+  if (modelId === currentModel && engine.getStatus().status === 'ready') {
+    ui.showNotification('Already using this model');
+    return;
+  }
+
+  const hasWebGPU = await engine.checkWebGPU();
+  if (!hasWebGPU) {
+    ui.showNotification('WebGPU not available on this device', 'error');
+    return;
+  }
+
+  if (btn) btn.textContent = 'Downloading...';
+  if (hint) hint.textContent = 'Starting download...';
+
+  try {
+    // Reset engine for new model
+    engine.engine = null;
+    engine.status = 'idle';
+
+    await engine.init(modelId, (progress) => {
+      const pct = Math.round((progress.progress || 0) * 100);
+      if (hint) hint.textContent = progress.text || `Downloading... ${pct}%`;
+    });
+
+    if (hint) hint.textContent = 'Model ready — running on your device';
+    if (btn) btn.textContent = 'Download & Switch';
+    savePref('selected_model', modelId);
+    ui.showNotification('Switched to ' + (engine.getStatus().modelInfo?.name || modelId));
+    updateSettingsView();
+  } catch (err) {
+    if (hint) hint.textContent = 'Download failed: ' + err.message;
+    if (btn) btn.textContent = 'Download & Switch';
+    ui.showNotification('Failed: ' + err.message, 'error');
+  }
 }
 
 /**

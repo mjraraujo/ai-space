@@ -311,42 +311,42 @@ export class Voice {
       this._setState('speaking');
 
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.1;
+      utterance.rate = 1.0;
       utterance.pitch = 1.0;
       utterance.volume = 1.0;
-      utterance.lang = this.preferredLang || 'en-US';
+      utterance.lang = 'en-US';
 
-      // Pick the best English voice available
+      // STRICTLY pick English voice — never Portuguese or other languages
       const voices = this.synthesis.getVoices();
       if (voices.length > 0) {
-        const lang = this.preferredLang || 'en';
-        const langPrefix = lang.split('-')[0];
+        // Filter ONLY English voices
+        const enVoices = voices.filter(v =>
+          v.lang === 'en-US' || v.lang === 'en-GB' || v.lang === 'en_US' || v.lang === 'en_GB' ||
+          v.lang === 'en-AU' || v.lang.startsWith('en-') || v.lang.startsWith('en_')
+        );
 
-        // If user picked a specific voice index, use it
         if (this.preferredVoiceIndex >= 0 && this.preferredVoiceIndex < voices.length) {
           utterance.voice = voices[this.preferredVoiceIndex];
-        } else {
-          // Priority: find the most natural-sounding English voice
-          // On iOS: "Samantha" (Enhanced), "Karen", "Daniel" are good
-          // On Chrome: "Google US English" or any with "Natural"/"Enhanced"
-          const goodNames = ['samantha', 'karen', 'daniel', 'moira', 'google us english', 'google uk english', 'natural', 'enhanced', 'premium'];
-          
-          // 1. Try to find a high-quality English voice by name
-          const premium = voices.find(v =>
-            v.lang.startsWith(langPrefix) &&
-            goodNames.some(n => v.name.toLowerCase().includes(n))
-          );
-          
-          // 2. Local English voice
-          const local = voices.find(v =>
-            v.lang.startsWith(langPrefix) && v.localService
-          );
-          
-          // 3. Any English voice
-          const any = voices.find(v => v.lang.startsWith(langPrefix));
+        } else if (enVoices.length > 0) {
+          // Priority order for natural-sounding voices
+          const namePatterns = [
+            'samantha', 'ava', 'allison', 'susan', 'zoe',   // iOS premium female
+            'tom', 'aaron', 'nicky',                          // iOS premium male
+            'google us english', 'google uk english male',     // Chrome
+            'enhanced', 'premium', 'natural',                  // quality markers
+            'karen', 'daniel', 'moira', 'kate', 'oliver',     // iOS standard
+            'microsoft', 'alex'                                // desktop
+          ];
 
-          utterance.voice = premium || local || any || null;
+          let picked = null;
+          for (const pattern of namePatterns) {
+            picked = enVoices.find(v => v.name.toLowerCase().includes(pattern));
+            if (picked) break;
+          }
+
+          utterance.voice = picked || enVoices[0];
         }
+        // If no English voices found at all, don't set voice — let browser use default with en-US lang
       }
 
       utterance.onend = () => {

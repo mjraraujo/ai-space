@@ -12,20 +12,25 @@
  */
 
 const MODELS = {
+  'SmolLM2-360M-Instruct-q4f16_1-MLC': {
+    name: 'SmolLM2 360M',
+    size: '200 MB',
+    description: 'Ultra-fast. Basic tasks, quick replies.'
+  },
   'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': {
     name: 'Qwen 2.5 0.5B',
-    size: '~350MB',
-    description: 'Default. Good balance of speed and quality.'
+    size: '350 MB',
+    description: 'Recommended. Good balance of speed and quality.'
   },
   'Llama-3.2-1B-Instruct-q4f16_1-MLC': {
     name: 'Llama 3.2 1B',
-    size: '~700MB',
-    description: 'Larger model. Better reasoning, slower download.'
+    size: '700 MB',
+    description: 'Stronger reasoning. Slower download.'
   },
-  'SmolLM2-360M-Instruct-q4f16_1-MLC': {
-    name: 'SmolLM2 360M',
-    size: '~200MB',
-    description: 'Smallest. Fastest download, basic tasks.'
+  'Phi-3.5-mini-instruct-q4f16_1-MLC': {
+    name: 'Phi 3.5 Mini 3.8B',
+    size: '2.2 GB',
+    description: 'Most capable local model. Needs 4GB+ RAM.'
   }
 };
 
