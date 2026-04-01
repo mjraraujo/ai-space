@@ -22,7 +22,9 @@ export class Voice {
     this.onInterimResult = null; // callback(text) - interim transcription text
     this.onSilenceDetected = null; // callback(text) - conversation mode: user stopped talking
     this.conversationMode = false; // continuous listen -> respond -> listen loop
-    this.silenceTimeout = 1500; // ms of silence before auto-sending
+    this.silenceTimeout = 2000; // ms of silence before auto-sending (2s for natural pauses)
+    this.preferredLang = 'en-US'; // force English
+    this.preferredVoiceIndex = -1; // -1 = auto-pick best
     this._recognition = null;
     this._recognitionResolve = null;
     this._interimText = '';
@@ -167,7 +169,7 @@ export class Voice {
     return new Promise((resolve, reject) => {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       this._recognition = new SR();
-      this._recognition.lang = navigator.language || 'en-US';
+      this._recognition.lang = this.preferredLang || 'en-US';
       this._recognition.interimResults = true;
       this._recognition.continuous = true;
       this._recognition.maxAlternatives = 1;
@@ -309,23 +311,41 @@ export class Voice {
       this._setState('speaking');
 
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.2;
+      utterance.rate = 1.1;
       utterance.pitch = 1.0;
       utterance.volume = 1.0;
+      utterance.lang = this.preferredLang || 'en-US';
 
-      // Try to pick a good local voice matching user's language
+      // Pick the best English voice available
       const voices = this.synthesis.getVoices();
       if (voices.length > 0) {
-        const langPrefix = (navigator.language || 'en').split('-')[0];
-        // Prefer local service voices
-        const preferred = voices.find(v =>
-          v.lang.startsWith(langPrefix) && v.localService
-        );
-        const fallback = voices.find(v => v.lang.startsWith(langPrefix));
-        if (preferred) {
-          utterance.voice = preferred;
-        } else if (fallback) {
-          utterance.voice = fallback;
+        const lang = this.preferredLang || 'en';
+        const langPrefix = lang.split('-')[0];
+
+        // If user picked a specific voice index, use it
+        if (this.preferredVoiceIndex >= 0 && this.preferredVoiceIndex < voices.length) {
+          utterance.voice = voices[this.preferredVoiceIndex];
+        } else {
+          // Priority: find the most natural-sounding English voice
+          // On iOS: "Samantha" (Enhanced), "Karen", "Daniel" are good
+          // On Chrome: "Google US English" or any with "Natural"/"Enhanced"
+          const goodNames = ['samantha', 'karen', 'daniel', 'moira', 'google us english', 'google uk english', 'natural', 'enhanced', 'premium'];
+          
+          // 1. Try to find a high-quality English voice by name
+          const premium = voices.find(v =>
+            v.lang.startsWith(langPrefix) &&
+            goodNames.some(n => v.name.toLowerCase().includes(n))
+          );
+          
+          // 2. Local English voice
+          const local = voices.find(v =>
+            v.lang.startsWith(langPrefix) && v.localService
+          );
+          
+          // 3. Any English voice
+          const any = voices.find(v => v.lang.startsWith(langPrefix));
+
+          utterance.voice = premium || local || any || null;
         }
       }
 
@@ -379,8 +399,20 @@ export class Voice {
    */
   async resumeListening() {
     if (!this.conversationMode || this.isRecording) return;
+
+    // Small delay so TTS audio clears before mic opens
+    await new Promise(r => setTimeout(r, 300));
+
+    if (!this.conversationMode) return; // might have been cancelled during delay
+
+    // Reset state for fresh listening
+    this._finalText = '';
+    this._interimText = '';
+    this._clearSilenceTimer();
+
     try {
       await this.startRecording();
+      this._setState('listening');
     } catch (err) {
       console.warn('Failed to resume listening:', err);
       this.conversationMode = false;
