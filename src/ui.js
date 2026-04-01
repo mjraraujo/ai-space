@@ -34,18 +34,12 @@ export class UI {
     for (const [name, el] of Object.entries(this.views)) {
       if (name === viewName) {
         el.classList.add('active');
-        // Trigger reflow for transition
         requestAnimationFrame(() => {
           el.classList.add('visible');
         });
       } else {
         el.classList.remove('visible');
-        // Wait for fade out before hiding
-        setTimeout(() => {
-          if (!el.classList.contains('visible')) {
-            el.classList.remove('active');
-          }
-        }, 400);
+        el.classList.remove('active');
       }
     }
   }
