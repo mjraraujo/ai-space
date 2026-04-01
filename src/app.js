@@ -9,6 +9,7 @@ import { Shortcuts } from './shortcuts.js';
 import { UI } from './ui.js';
 import { Voice } from './voice.js';
 import { Camera } from './camera.js';
+import { deviceAuthFlow, getAuthIssuer } from './codex-auth.js';
 
 // State
 const state = {
@@ -1047,13 +1048,6 @@ const CLOUD_PROVIDERS = {
   }
 };
 
-// OpenAI Codex OAuth constants
-const CODEX_CLIENT_ID = 'app_EMarann';
-// Build URLs at runtime to avoid security scanner redaction
-const _authHost = ['https://','auth','.','openai','.','com'].join('');
-const CODEX_AUTH_ISSUER = _authHost;
-const CODEX_TOKEN_URL = _authHost + '/oauth/token';
-
 function handleProviderChange() {
   const select = document.getElementById('cloud-provider');
   const customFields = document.getElementById('cloud-custom-fields');
@@ -1110,111 +1104,51 @@ async function handleSaveCloudConfig() {
 }
 
 /**
- * ChatGPT Plus OAuth device code flow
- * Uses the same flow as OpenAI Codex CLI / OpenClaw
+ * ChatGPT Plus OAuth — uses imported device auth module
  */
 async function handleChatGPTConnect() {
-  const status = document.getElementById('oauth-status');
+  const statusEl = document.getElementById('oauth-status');
   const codeDisplay = document.getElementById('oauth-code');
   const connectBtn = document.getElementById('chatgpt-connect-btn');
 
   if (connectBtn) connectBtn.disabled = true;
-  if (status) status.textContent = 'Requesting login code...';
 
   try {
-    // Step 1: Get device code
-    const resp = await fetch(CODEX_AUTH_ISSUER + '/api/accounts/deviceauth/usercode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: CODEX_CLIENT_ID })
-    });
-
-    if (!resp.ok) throw new Error('Failed to get device code');
-    const data = await resp.json();
-
-    const userCode = data.user_code;
-    const deviceAuthId = data.device_auth_id;
-    const pollInterval = Math.max(3, parseInt(data.interval || '5')) * 1000;
-
-    // Step 2: Show code to user
-    if (codeDisplay) {
-      codeDisplay.textContent = userCode;
-      codeDisplay.style.display = 'block';
-    }
-    if (status) status.textContent = 'Open the link and enter this code:';
-
-    // Open auth page
-    window.open(CODEX_AUTH_ISSUER + '/codex/device', '_blank');
-
-    // Step 3: Poll for authorization
-    const maxWait = 10 * 60 * 1000; // 10 min
-    const start = Date.now();
-
-    while (Date.now() - start < maxWait) {
-      await new Promise(r => setTimeout(r, pollInterval));
-
-      const pollResp = await fetch(CODEX_AUTH_ISSUER + '/api/accounts/deviceauth/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode })
-      });
-
-      if (pollResp.status === 200) {
-        const codeResp = await pollResp.json();
-        const authCode = codeResp.authorization_code;
-        const codeVerifier = codeResp.code_verifier;
-        const redirectUri = CODEX_AUTH_ISSUER + '/deviceauth/callback';
-
-        // Step 4: Exchange for tokens
-        const tokenParams = new URLSearchParams({
-          grant_type: 'authorization_code',
-          code: authCode,
-          redirect_uri: redirectUri,
-          client_id: CODEX_CLIENT_ID,
-          code_verifier: codeVerifier
-        });
-        const tokenResp = await fetch(CODEX_TOKEN_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: tokenParams
-        });
-
-        if (!tokenResp.ok) throw new Error('Token exchange failed');
-        const tokens = await tokenResp.json();
-
-        // Save tokens
-        const accessToken = tokens.access_token;
-        const refreshToken = tokens.refresh_token;
-
-        engine.setCloudConfig(
-          CLOUD_PROVIDERS.chatgpt.endpoint,
-          accessToken,
-          CLOUD_PROVIDERS.chatgpt.model
-        );
-
-        savePref('cloud_provider', 'chatgpt');
-        savePref('cloud_endpoint', CLOUD_PROVIDERS.chatgpt.endpoint);
-        savePref('cloud_api_key', accessToken);
-        savePref('cloud_refresh_token', refreshToken);
-        savePref('cloud_model', CLOUD_PROVIDERS.chatgpt.model);
-
-        if (status) status.textContent = 'Connected to ChatGPT';
-        if (codeDisplay) codeDisplay.style.display = 'none';
-        if (connectBtn) { connectBtn.disabled = false; connectBtn.textContent = 'Connected'; }
-        ui.showNotification('ChatGPT Plus connected');
-        return;
+    const tokens = await deviceAuthFlow(
+      // onCode — show the code and open browser
+      ({ userCode, verificationUrl }) => {
+        if (codeDisplay) {
+          codeDisplay.textContent = userCode;
+          codeDisplay.style.display = 'block';
+        }
+        if (statusEl) statusEl.textContent = 'Open the link and enter this code:';
+        window.open(verificationUrl, '_blank');
+      },
+      // onStatus — update status text
+      (text) => {
+        if (statusEl) statusEl.textContent = text;
       }
+    );
 
-      if (pollResp.status !== 403 && pollResp.status !== 404) {
-        throw new Error('Auth failed: ' + pollResp.status);
-      }
+    // Success — save tokens
+    engine.setCloudConfig(
+      CLOUD_PROVIDERS.chatgpt.endpoint,
+      tokens.access_token,
+      CLOUD_PROVIDERS.chatgpt.model
+    );
 
-      if (status) status.textContent = 'Waiting for sign-in...';
-    }
+    savePref('cloud_provider', 'chatgpt');
+    savePref('cloud_endpoint', CLOUD_PROVIDERS.chatgpt.endpoint);
+    savePref('cloud_api_key', tokens.access_token);
+    savePref('cloud_refresh_token', tokens.refresh_token);
+    savePref('cloud_model', CLOUD_PROVIDERS.chatgpt.model);
 
-    throw new Error('Login timed out');
+    if (statusEl) statusEl.textContent = 'Connected to ChatGPT';
+    if (codeDisplay) codeDisplay.style.display = 'none';
+    if (connectBtn) { connectBtn.disabled = false; connectBtn.textContent = 'Connected'; }
+    ui.showNotification('ChatGPT Plus connected');
   } catch (err) {
-    if (status) status.textContent = 'Error: ' + err.message;
+    if (statusEl) statusEl.textContent = err.message;
     if (connectBtn) connectBtn.disabled = false;
     if (codeDisplay) codeDisplay.style.display = 'none';
   }
