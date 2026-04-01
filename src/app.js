@@ -440,36 +440,86 @@ async function handleClearData() {
 }
 
 /**
- * Voice input
+ * Voice input — tap to record, tap to stop, auto-send
  */
 async function handleVoice() {
   const btn = document.getElementById('voice-btn');
+  const input = document.getElementById('chat-input');
+
   if (!voice.supported) {
     ui.showNotification('Voice not supported in this browser', 'error');
     return;
   }
 
-  if (voice.isListening) {
-    voice.stop();
+  // If recording, stop and process
+  if (voice.isRecording) {
     btn.classList.remove('active');
-    return;
-  }
+    const result = await voice.stopRecording();
 
-  btn.classList.add('active');
-  try {
-    const text = await voice.listen();
-    btn.classList.remove('active');
-    if (text) {
-      const input = document.getElementById('chat-input');
-      input.value = (input.value ? input.value + ' ' : '') + text;
+    if (result.text) {
+      // Got text from SpeechRecognition — send it
+      await sendMessage(result.text);
+
+      // If AI responded and TTS is on, speak the response
+      const lastMsg = state.messages[state.messages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        await voice.speak(lastMsg.content);
+      }
+    } else if (result.audio) {
+      // Got audio blob — would need Whisper API for transcription
+      // For now show a note
+      input.value = '[Voice message recorded — cloud transcription needed]';
       ui.autoResizeInput();
       ui.setSendEnabled(true);
     }
+    return;
+  }
+
+  // Start recording
+  try {
+    // Show interim results in the input field
+    voice.onInterimResult = (text) => {
+      input.value = text;
+      ui.autoResizeInput();
+    };
+
+    await voice.startRecording();
+    btn.classList.add('active');
+    input.placeholder = 'Listening...';
+    input.value = '';
   } catch (err) {
     btn.classList.remove('active');
-    ui.showNotification('Voice error: ' + err.message, 'error');
+    input.placeholder = 'Message...';
+    ui.showNotification('Mic error: ' + err.message, 'error');
   }
 }
+
+/**
+ * Voice state change handler
+ */
+voice.onStateChange = (s) => {
+  const btn = document.getElementById('voice-btn');
+  const input = document.getElementById('chat-input');
+  if (!btn || !input) return;
+
+  switch (s) {
+    case 'listening':
+      btn.classList.add('active');
+      input.placeholder = 'Listening...';
+      break;
+    case 'processing':
+      btn.classList.remove('active');
+      input.placeholder = 'Processing...';
+      break;
+    case 'speaking':
+      input.placeholder = 'Speaking...';
+      break;
+    default:
+      btn.classList.remove('active');
+      input.placeholder = 'Message...';
+      input.value = '';
+  }
+};
 
 /**
  * Camera / image input
