@@ -1009,10 +1009,8 @@ function handleProviderChange() {
 
   if (customFields) customFields.style.display = provider === 'custom' ? 'block' : 'none';
   if (hint) hint.textContent = preset?.hint || '';
-  if (apiKeyInput) {
-    apiKeyInput.placeholder = preset?.placeholder || 'API key';
-    apiKeyInput.parentElement.style.display = isOAuth ? 'none' : '';
-  }
+  if (apiKeyInput) apiKeyInput.placeholder = preset?.placeholder || 'API key';
+  if (apiKeyInput) apiKeyInput.style.display = isOAuth ? 'none' : '';
   if (apiKeyLabel) apiKeyLabel.style.display = isOAuth ? 'none' : '';
   if (oauthSection) oauthSection.style.display = isOAuth ? 'block' : 'none';
   if (saveBtn) saveBtn.style.display = isOAuth ? 'none' : '';
