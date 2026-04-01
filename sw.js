@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'ai-space-v2';
+const CACHE_VERSION = 'ai-space-v3';
 const MODEL_CACHE = 'ai-space-models-v1';
 
 // Install: activate immediately
