@@ -159,37 +159,28 @@ function goToOnboardingStep(step) {
     onboardingAutoAdvanceTimer = null;
   }
 
-  // Hide current step
-  const current = document.querySelector('.onboarding-step.active');
-  if (current) {
-    current.style.opacity = '0';
-    setTimeout(() => current.classList.remove('active'), 300);
-  }
+  // Hide all steps, show target
+  document.querySelectorAll('.onboarding-step').forEach(el => {
+    el.classList.remove('active');
+  });
 
   onboardingStep = step;
 
-  // Show new step after a brief delay for transition
-  setTimeout(() => {
-    const next = document.getElementById(`onboarding-step-${step}`);
-    if (next) {
-      next.classList.add('active');
-      // Force reflow then fade in
-      requestAnimationFrame(() => {
-        next.style.opacity = '1';
-      });
-    }
+  const next = document.getElementById(`onboarding-step-${step}`);
+  if (next) {
+    next.classList.add('active');
+  }
 
-    // Voice guidance for talk mode
-    if (onboardingData.interactionMode === 'talk' && step > 1) {
-      const title = next?.querySelector('.onboarding-step-title');
-      if (title && voice.ttsEnabled) {
-        try { voice.speak(title.textContent); } catch {}
-      }
+  // Voice guidance for talk mode
+  if (onboardingData.interactionMode === 'talk' && step > 1) {
+    const title = next?.querySelector('.onboarding-step-title');
+    if (title && voice.ttsEnabled) {
+      try { voice.speak(title.textContent); } catch {}
     }
+  }
 
-    // Step-specific logic
-    onStepEnter(step);
-  }, current ? 350 : 50);
+  // Step-specific logic
+  onStepEnter(step);
 }
 
 /**
