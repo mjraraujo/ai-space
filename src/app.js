@@ -44,7 +44,7 @@ async function initApp() {
     return;
   }
 
-  // Wire event listeners FIRST so skip button works immediately
+  // Wire event listeners FIRST so buttons work immediately
   wireEventListeners();
 
   // Initialize memory in background — never block the UI
@@ -53,9 +53,20 @@ async function initApp() {
   // Check for incoming shortcut data
   handleIncomingShortcut();
 
-  // Go straight to deciding the view — don't wait for memory
-  console.log('[ai-space] checking WebGPU...');
-  await startOnboarding();
+  // Check if this is a returning user (localStorage is synchronous)
+  const hasVisited = localStorage.getItem('ai-space-visited');
+
+  if (hasVisited) {
+    // Returning user — skip onboarding, go straight to chat
+    console.log('[ai-space] returning user, skipping onboarding');
+    loadSavedOnboardingPrefs(); // Load prompt context in background
+    transition('chat');
+    tryInitEngine(); // Try to init engine in background
+  } else {
+    // First-time user — start onboarding wizard
+    console.log('[ai-space] first visit, starting onboarding wizard');
+    await startOnboarding();
+  }
   console.log('[ai-space] initApp done');
 }
 
@@ -97,10 +108,246 @@ function initMemoryInBackground() {
 }
 
 /**
- * Start onboarding
+ * Onboarding wizard state
  */
-async function startOnboarding() {
-  ui.updateProgress(0, 'Checking device...');
+let onboardingStep = 0;
+let onboardingData = {
+  interactionMode: 'chat',
+  name: '',
+  timezone: '',
+  dateStr: '',
+  tone: 'balanced',
+  voiceIndex: -1
+};
+let onboardingAutoAdvanceTimer = null;
+
+/**
+ * Build personalized system prompt suffix from user preferences
+ */
+function buildPersonalizedPrompt() {
+  const parts = [];
+  if (onboardingData.name) {
+    parts.push(`The user's name is ${onboardingData.name}.`);
+  }
+  if (onboardingData.tone && onboardingData.tone !== 'balanced') {
+    const toneDesc = {
+      casual: 'casual and relaxed',
+      professional: 'professional and precise',
+      playful: 'playful and creative'
+    };
+    parts.push(`They prefer a ${toneDesc[onboardingData.tone] || onboardingData.tone} communication style.`);
+  }
+  if (onboardingData.timezone) {
+    parts.push(`Their timezone is ${onboardingData.timezone}.`);
+  }
+  if (onboardingData.dateStr) {
+    parts.push(`Today is ${onboardingData.dateStr}.`);
+  }
+  if (onboardingData.interactionMode === 'talk') {
+    parts.push('The user prefers voice interaction.');
+  }
+  return parts.length > 0 ? '\n\n' + parts.join(' ') : '';
+}
+
+/**
+ * Transition to a specific onboarding step
+ */
+function goToOnboardingStep(step) {
+  // Clear any pending auto-advance
+  if (onboardingAutoAdvanceTimer) {
+    clearTimeout(onboardingAutoAdvanceTimer);
+    onboardingAutoAdvanceTimer = null;
+  }
+
+  // Hide current step
+  const current = document.querySelector('.onboarding-step.active');
+  if (current) {
+    current.style.opacity = '0';
+    setTimeout(() => current.classList.remove('active'), 300);
+  }
+
+  onboardingStep = step;
+
+  // Show new step after a brief delay for transition
+  setTimeout(() => {
+    const next = document.getElementById(`onboarding-step-${step}`);
+    if (next) {
+      next.classList.add('active');
+      // Force reflow then fade in
+      requestAnimationFrame(() => {
+        next.style.opacity = '1';
+      });
+    }
+
+    // Voice guidance for talk mode
+    if (onboardingData.interactionMode === 'talk' && step > 1) {
+      const title = next?.querySelector('.onboarding-step-title');
+      if (title && voice.ttsEnabled) {
+        try { voice.speak(title.textContent); } catch {}
+      }
+    }
+
+    // Step-specific logic
+    onStepEnter(step);
+  }, current ? 350 : 50);
+}
+
+/**
+ * Step-specific initialization when entering a step
+ */
+function onStepEnter(step) {
+  switch (step) {
+    case 0:
+      // Auto-advance welcome after 2s
+      onboardingAutoAdvanceTimer = setTimeout(() => goToOnboardingStep(1), 2000);
+      break;
+
+    case 2: {
+      // Focus name input
+      const nameInput = document.getElementById('onboarding-name');
+      if (nameInput) {
+        setTimeout(() => nameInput.focus(), 400);
+      }
+      // If talk mode, try to listen for name
+      if (onboardingData.interactionMode === 'talk' && voice.hasSpeechRecognition) {
+        try {
+          voice.onSilenceDetected = (text) => {
+            if (text && text.trim()) {
+              onboardingData.name = text.trim();
+              if (nameInput) nameInput.value = onboardingData.name;
+              voice.onSilenceDetected = null;
+              goToOnboardingStep(3);
+            }
+          };
+          voice.onInterimResult = (text) => {
+            if (nameInput) nameInput.value = text;
+          };
+          voice.startRecording();
+        } catch {}
+      }
+      break;
+    }
+
+    case 3: {
+      // Auto-detect timezone and date
+      try {
+        onboardingData.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch {
+        onboardingData.timezone = 'Unknown';
+      }
+      const now = new Date();
+      onboardingData.dateStr = now.toLocaleDateString(undefined, {
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+      });
+      const infoEl = document.getElementById('onboarding-location-info');
+      if (infoEl) {
+        infoEl.textContent = `It looks like you're in ${onboardingData.timezone} and today is ${onboardingData.dateStr}.`;
+      }
+      // Auto-advance after 4s if user doesn't tap
+      onboardingAutoAdvanceTimer = setTimeout(() => goToOnboardingStep(4), 4000);
+      break;
+    }
+
+    case 5: {
+      // Voice picker — populate voices
+      if (onboardingData.interactionMode !== 'talk') {
+        // Skip voice picker if chat mode
+        goToOnboardingStep(6);
+        return;
+      }
+      populateVoicePicker();
+      break;
+    }
+
+    case 6: {
+      // Ready step
+      const readyTitle = document.getElementById('onboarding-ready-title');
+      const displayName = onboardingData.name || 'friend';
+      if (readyTitle) {
+        readyTitle.textContent = `You're all set, ${displayName}.`;
+      }
+
+      // Check WebGPU and show status
+      setupReadyStep();
+      break;
+    }
+  }
+}
+
+/**
+ * Populate voice picker with available SpeechSynthesis voices
+ */
+function populateVoicePicker() {
+  const list = document.getElementById('onboarding-voice-list');
+  if (!list) return;
+
+  const getVoices = () => {
+    const allVoices = speechSynthesis.getVoices();
+    // Filter to user's language
+    const userLang = navigator.language?.split('-')[0] || 'en';
+    let filtered = allVoices.filter(v => v.lang.startsWith(userLang));
+    if (filtered.length === 0) filtered = allVoices.filter(v => v.lang.startsWith('en'));
+    if (filtered.length === 0) filtered = allVoices;
+
+    // Show up to 5
+    const shown = filtered.slice(0, 5);
+    list.innerHTML = '';
+
+    shown.forEach((v, i) => {
+      const card = document.createElement('div');
+      card.className = 'onboarding-voice-card';
+      card.dataset.voiceIndex = String(allVoices.indexOf(v));
+
+      const name = document.createElement('span');
+      name.className = 'onboarding-voice-name';
+      name.textContent = v.name.replace(/Microsoft |Google |Apple /, '');
+
+      const preview = document.createElement('button');
+      preview.className = 'onboarding-voice-preview';
+      preview.textContent = '▶ Preview';
+      preview.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const utt = new SpeechSynthesisUtterance('Hello! I can be your voice.');
+        utt.voice = v;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utt);
+      });
+
+      card.appendChild(name);
+      card.appendChild(preview);
+
+      card.addEventListener('click', () => {
+        onboardingData.voiceIndex = allVoices.indexOf(v);
+        list.querySelectorAll('.onboarding-voice-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        setTimeout(() => goToOnboardingStep(6), 300);
+      });
+
+      list.appendChild(card);
+    });
+
+    if (shown.length === 0) {
+      list.innerHTML = '<p class="onboarding-info">No voices available</p>';
+    }
+  };
+
+  // Voices may load async
+  if (speechSynthesis.getVoices().length > 0) {
+    getVoices();
+  } else {
+    speechSynthesis.addEventListener('voiceschanged', getVoices, { once: true });
+    // Fallback if voices never fire
+    setTimeout(getVoices, 500);
+  }
+}
+
+/**
+ * Setup the ready step — check WebGPU, show mode, optional download
+ */
+async function setupReadyStep() {
+  const badge = document.getElementById('onboarding-mode-badge');
+  const info = document.getElementById('onboarding-ready-info');
+  const downloadEl = document.getElementById('onboarding-download-progress');
 
   let hasWebGPU = false;
   try {
@@ -110,32 +357,112 @@ async function startOnboarding() {
   }
 
   if (hasWebGPU) {
-    ui.updateProgress(5, 'WebGPU ready. Downloading model...');
-    await markVisited();
-    transition('downloading');
+    if (badge) badge.textContent = '⚡ Running locally on your device';
+    if (info) info.textContent = 'Your AI model will download now. After that, everything runs offline on your device.';
+    if (downloadEl) downloadEl.style.display = 'flex';
+
+    // Start model download
     try {
       await engine.init(null, (progress) => {
         const pct = Math.round((progress.progress || 0) * 100);
         ui.updateProgress(pct, progress.text || 'Downloading...');
       });
       await auditLog('model_load', { model: engine.getStatus().modelId, success: true });
-      ui.updateProgress(100, 'Ready.');
-      setTimeout(() => transition('chat'), 400);
+      ui.updateProgress(100, 'Ready!');
     } catch (err) {
       console.error('Model download failed:', err);
       state.mode = 'cloud';
       engine.mode = 'cloud';
       savePref('mode', 'cloud');
-      transition('chat');
+      if (badge) badge.textContent = '☁️ Running in cloud mode';
+      if (info) info.textContent = 'Local model failed to load. Using cloud mode instead.';
+      if (downloadEl) downloadEl.style.display = 'none';
     }
   } else {
-    // No WebGPU — go straight to chat, cloud mode
     state.mode = 'cloud';
     engine.mode = 'cloud';
     savePref('mode', 'cloud');
-    await markVisited();
-    transition('chat');
+    if (badge) badge.textContent = '☁️ Running in cloud mode';
+    if (info) info.textContent = 'WebGPU is not available on this device. Using cloud mode for AI inference.';
+    if (downloadEl) downloadEl.style.display = 'none';
   }
+}
+
+/**
+ * Complete onboarding — save preferences and go to chat
+ */
+async function completeOnboarding() {
+  // Save all preferences
+  savePref('interaction_mode', onboardingData.interactionMode);
+  savePref('user_name', onboardingData.name);
+  savePref('timezone', onboardingData.timezone);
+  savePref('tone', onboardingData.tone);
+  savePref('voice_index', onboardingData.voiceIndex);
+
+  // Build and save personalized prompt context
+  const promptContext = buildPersonalizedPrompt();
+  savePref('prompt_context', promptContext);
+
+  // Set it on the engine
+  engine.promptContext = promptContext;
+
+  await markVisited();
+  transition('chat');
+}
+
+/**
+ * Start onboarding — multi-step wizard for first-time users
+ */
+async function startOnboarding() {
+  // Check if returning user
+  // (state.firstVisit is set by memory in background, but may not be ready yet)
+  // We start the wizard regardless — initMemoryInBackground will set firstVisit
+
+  // Load any saved preferences for returning users (async, non-blocking)
+  loadSavedOnboardingPrefs();
+
+  // Start at step 0
+  goToOnboardingStep(0);
+}
+
+/**
+ * Load saved onboarding preferences for returning users or prompt context
+ */
+async function loadSavedOnboardingPrefs() {
+  // Wait a bit for memory to be ready
+  const waitForMemory = () => new Promise(resolve => {
+    if (memoryReady) return resolve(true);
+    let attempts = 0;
+    const check = setInterval(() => {
+      attempts++;
+      if (memoryReady || attempts > 20) {
+        clearInterval(check);
+        resolve(memoryReady);
+      }
+    }, 100);
+  });
+
+  await waitForMemory();
+  if (!memoryReady) return;
+
+  try {
+    const promptContext = await memory.getPreference('prompt_context');
+    if (promptContext) {
+      engine.promptContext = promptContext;
+    }
+
+    // Also load individual prefs for the data object
+    const name = await memory.getPreference('user_name');
+    if (name) onboardingData.name = name;
+    const tone = await memory.getPreference('tone');
+    if (tone) onboardingData.tone = tone;
+    const tz = await memory.getPreference('timezone');
+    if (tz) onboardingData.timezone = tz;
+    const mode = await memory.getPreference('interaction_mode');
+    if (mode) onboardingData.interactionMode = mode;
+    const vi = await memory.getPreference('voice_index');
+    if (vi !== null && vi !== undefined) onboardingData.voiceIndex = vi;
+  } catch {}
 }
 
 /**
@@ -176,6 +503,7 @@ function transition(phase) {
  */
 async function markVisited() {
   state.firstVisit = false;
+  localStorage.setItem('ai-space-visited', 'true');
   savePref('visited', true);
 }
 
@@ -235,15 +563,58 @@ function wireEventListeners() {
     if (option && option.dataset.mode) setMode(option.dataset.mode);
   });
 
-  // Skip onboarding
-  const skipBtn = document.getElementById('skip-onboarding');
-  if (skipBtn) skipBtn.addEventListener('click', () => {
-    state.mode = 'cloud';
-    engine.mode = 'cloud';
-    savePref('mode', 'cloud');
-    markVisited();
-    transition('chat');
+  // === Onboarding wizard event listeners ===
+
+  // Step 1: Interaction mode cards
+  document.querySelectorAll('#onboarding-step-1 .onboarding-card').forEach(card => {
+    card.addEventListener('click', () => {
+      onboardingData.interactionMode = card.dataset.mode;
+      document.querySelectorAll('#onboarding-step-1 .onboarding-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      setTimeout(() => goToOnboardingStep(2), 250);
+    });
   });
+
+  // Step 2: Name input
+  const nameInput = document.getElementById('onboarding-name');
+  if (nameInput) {
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        onboardingData.name = nameInput.value.trim();
+        goToOnboardingStep(3);
+      }
+    });
+  }
+  const skipNameBtn = document.getElementById('onboarding-skip-name');
+  if (skipNameBtn) skipNameBtn.addEventListener('click', () => {
+    onboardingData.name = nameInput?.value?.trim() || '';
+    goToOnboardingStep(3);
+  });
+
+  // Step 3: Location confirm/skip
+  const locConfirm = document.getElementById('onboarding-location-confirm');
+  if (locConfirm) locConfirm.addEventListener('click', () => goToOnboardingStep(4));
+  const locSkip = document.getElementById('onboarding-location-skip');
+  if (locSkip) locSkip.addEventListener('click', () => goToOnboardingStep(4));
+
+  // Step 4: Tone cards
+  document.querySelectorAll('#onboarding-tone-cards .onboarding-card').forEach(card => {
+    card.addEventListener('click', () => {
+      onboardingData.tone = card.dataset.tone;
+      document.querySelectorAll('#onboarding-tone-cards .onboarding-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      setTimeout(() => goToOnboardingStep(5), 250);
+    });
+  });
+
+  // Step 5: Skip voice
+  const skipVoiceBtn = document.getElementById('onboarding-skip-voice');
+  if (skipVoiceBtn) skipVoiceBtn.addEventListener('click', () => goToOnboardingStep(6));
+
+  // Step 6: Enter space
+  const enterBtn = document.getElementById('onboarding-enter');
+  if (enterBtn) enterBtn.addEventListener('click', () => completeOnboarding());
 
   // Voice button
   const voiceBtn = document.getElementById('voice-btn');

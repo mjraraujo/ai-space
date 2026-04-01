@@ -64,6 +64,9 @@ export class AIEngine {
     this.cloudEndpoint = '';
     this.cloudApiKey = '';
     this.cloudModel = 'gpt-3.5-turbo';
+
+    // Personalized prompt context from onboarding
+    this.promptContext = '';
   }
 
   /**
@@ -176,8 +179,9 @@ export class AIEngine {
       throw new Error('Local engine not ready. Call init() first or switch to cloud mode.');
     }
 
+    const systemContent = SYSTEM_PROMPT + (this.promptContext || '');
     const fullMessages = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemContent },
       ...messages
     ];
 
@@ -215,8 +219,9 @@ export class AIEngine {
       throw new Error('Cloud API not configured. Set endpoint and API key in settings.');
     }
 
+    const systemContent = SYSTEM_PROMPT + (this.promptContext || '');
     const fullMessages = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemContent },
       ...messages
     ];
 
