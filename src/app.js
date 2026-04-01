@@ -30,64 +30,48 @@ let memoryReady = false;
  * Initialize the application
  */
 async function initApp() {
+  console.log('[ai-space] initApp start');
+
   try {
     ui = new UI();
   } catch (err) {
-    console.error('UI init failed:', err);
+    console.error('[ai-space] UI init failed:', err);
     return;
   }
 
-  // Initialize memory (non-blocking — don't let it hang the app)
-  try {
-    const memPromise = memory.init();
-    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000));
-    await Promise.race([memPromise, timeout]);
-    await audit.init(memory);
-    memoryReady = true;
-  } catch (err) {
-    console.warn('Memory init failed or timed out, continuing without encryption:', err);
-    memoryReady = false;
-  }
+  // Wire event listeners FIRST so skip button works immediately
+  wireEventListeners();
 
-  // Load preferences
-  if (memoryReady) {
+  // Initialize memory in background — never block the UI
+  initMemoryInBackground();
+
+  // Go straight to deciding the view — don't wait for memory
+  console.log('[ai-space] checking WebGPU...');
+  await startOnboarding();
+  console.log('[ai-space] initApp done');
+}
+
+/**
+ * Init memory without blocking
+ */
+function initMemoryInBackground() {
+  (async () => {
     try {
+      await memory.init();
+      await audit.init(memory);
+      memoryReady = true;
+      console.log('[ai-space] memory ready');
+
+      // Load saved preferences
       const mode = await memory.getPreference('mode');
       if (mode) state.mode = mode;
       const visited = await memory.getPreference('visited');
-      state.firstVisit = !visited;
-    } catch {
-      // Use defaults
+      if (visited) state.firstVisit = false;
+    } catch (err) {
+      console.warn('[ai-space] memory init failed:', err);
+      memoryReady = false;
     }
-  }
-
-  // Wire event listeners
-  wireEventListeners();
-
-  // Check for share target
-  const urlParams = new URLSearchParams(window.location.search);
-  const sharedContent = await handleShareTarget(urlParams);
-  const skillInvocation = shortcuts.parseIncoming(urlParams);
-  if (urlParams.toString()) {
-    window.history.replaceState({}, '', window.location.pathname);
-  }
-
-  // Decide flow
-  if (!state.firstVisit) {
-    // Returning user — go straight to chat
-    transition('chat');
-    tryInitEngine();
-
-    if (sharedContent) {
-      sendMessage(sharedContent);
-    } else if (skillInvocation) {
-      const prompt = shortcuts.buildPrompt(skillInvocation);
-      if (prompt) sendMessage(prompt);
-    }
-  } else {
-    // First visit — check WebGPU and decide
-    await startOnboarding();
-  }
+  })();
 }
 
 /**
