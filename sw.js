@@ -1,23 +1,12 @@
-const CACHE_VERSION = 'ai-space-v1';
+const CACHE_VERSION = 'ai-space-v2';
 const MODEL_CACHE = 'ai-space-models-v1';
 
-const APP_SHELL = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icons/icon.svg'
-];
-
-// Install: cache app shell
+// Install: activate immediately
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => {
-      return cache.addAll(APP_SHELL);
-    }).then(() => self.skipWaiting())
-  );
+  self.skipWaiting();
 });
 
-// Activate: clean old caches
+// Activate: clean old caches, claim clients
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
@@ -30,56 +19,67 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch: cache-first for app shell, network-first for API/models
+// Fetch: cache-first for everything, network fallback
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Handle share target POST
-  if (url.searchParams.has('share-target') && event.request.method === 'POST') {
-    event.respondWith(handleShareTarget(event.request));
+  // Only handle GET
+  if (event.request.method !== 'GET') {
+    // Handle share target POST
+    if (url.searchParams.has('share-target') && event.request.method === 'POST') {
+      event.respondWith(handleShareTarget(event.request));
+    }
     return;
   }
 
-  // Model weight requests -> model cache
-  if (url.pathname.includes('wasm') || url.pathname.includes('model') || url.hostname.includes('huggingface')) {
-    event.respondWith(
-      caches.open(MODEL_CACHE).then((cache) => {
-        return cache.match(event.request).then((cached) => {
-          if (cached) return cached;
-          return fetch(event.request).then((response) => {
-            if (response.ok) {
-              cache.put(event.request, response.clone());
-            }
-            return response;
-          });
-        });
-      })
-    );
+  // Skip cross-origin CDN requests (web-llm from esm.run etc) — let them go to network
+  if (url.origin !== self.location.origin) {
+    // But cache model weights from huggingface
+    if (url.hostname.includes('huggingface') || url.pathname.includes('wasm') || url.pathname.includes('.bin')) {
+      event.respondWith(cacheFirst(event.request, MODEL_CACHE));
+    }
     return;
   }
 
-  // App shell: cache-first
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((response) => {
-        if (response.ok && event.request.method === 'GET') {
-          const clone = response.clone();
-          caches.open(CACHE_VERSION).then((cache) => {
-            cache.put(event.request, clone);
-          });
-        }
-        return response;
-      });
-    }).catch(() => {
-      if (event.request.destination === 'document') {
-        return caches.match('/index.html');
-      }
-    })
-  );
+  // Same-origin: cache-first, always cache on fetch
+  event.respondWith(cacheFirst(event.request, CACHE_VERSION));
 });
 
-// Handle share target POST: store in IndexedDB and redirect
+/**
+ * Cache-first strategy: serve from cache, fall back to network (and cache the response)
+ */
+async function cacheFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+
+  // Try cache first
+  const cached = await cache.match(request);
+  if (cached) return cached;
+
+  // Network fallback
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch (err) {
+    // Offline and not in cache — try to return index.html for navigation requests
+    if (request.destination === 'document') {
+      const fallback = await cache.match(new Request(self.registration.scope));
+      if (fallback) return fallback;
+      // Also try matching index.html under any path
+      const keys = await cache.keys();
+      for (const key of keys) {
+        if (key.url.endsWith('index.html') || key.url.endsWith('/')) {
+          return cache.match(key);
+        }
+      }
+    }
+    throw err;
+  }
+}
+
+// Handle share target POST
 async function handleShareTarget(request) {
   try {
     const formData = await request.formData();
@@ -90,15 +90,13 @@ async function handleShareTarget(request) {
       timestamp: Date.now()
     };
 
-    // Store in IndexedDB
     const db = await openShareDB();
     const tx = db.transaction('shared', 'readwrite');
-    const store = tx.objectStore('shared');
-    store.add(shared);
+    tx.objectStore('shared').add(shared);
 
-    return Response.redirect('/?shared=true', 303);
+    return Response.redirect(self.registration.scope + '?shared=true', 303);
   } catch (e) {
-    return Response.redirect('/', 303);
+    return Response.redirect(self.registration.scope, 303);
   }
 }
 
