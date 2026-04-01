@@ -611,6 +611,12 @@
       flex-shrink: 0;
     }
 
+    .chat-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .chat-header-title {
       font-size: 17px;
       font-weight: 600;
@@ -663,6 +669,7 @@
       font-size: 15px;
       line-height: 1.5;
       word-wrap: break-word;
+      white-space: pre-wrap;
     }
 
     .message-user .message-bubble {
@@ -979,6 +986,62 @@
       font-size: 15px;
     }
 
+    /* Cloud config inputs */
+    .settings-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: var(--fg);
+      font-family: inherit;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+      margin-bottom: 10px;
+    }
+
+    .settings-input:focus {
+      border-color: var(--fg-dim);
+    }
+
+    .settings-input::placeholder {
+      color: var(--fg-dim);
+    }
+
+    .settings-input-label {
+      display: block;
+      font-size: 13px;
+      color: var(--fg-muted);
+      margin-bottom: 6px;
+      margin-top: 10px;
+    }
+
+    .settings-input-label:first-child {
+      margin-top: 0;
+    }
+
+    .settings-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      color: var(--bg);
+      background: var(--fg);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      margin-top: 6px;
+    }
+
+    .settings-btn:hover {
+      opacity: 0.85;
+    }
+
     .settings-about {
       text-align: center;
       padding: 24px;
@@ -1194,7 +1257,10 @@
   <!-- Chat View -->
   <div id="chat" class="view">
     <div class="chat-header">
-      <span class="chat-header-title">AI Space</span>
+      <div class="chat-header-left">
+        <span class="chat-header-title">AI Space</span>
+        <button class="chat-header-btn" id="new-chat-btn" title="New conversation">+</button>
+      </div>
       <button class="chat-header-btn" id="open-settings">Settings</button>
     </div>
     <div class="chat-messages" id="messages"></div>
@@ -1261,6 +1327,26 @@
       </div>
 
       <div class="settings-section">
+        <div class="settings-section-title">Cloud API Configuration</div>
+        <div class="settings-card" style="padding: 16px;">
+          <label class="settings-input-label">API Endpoint</label>
+          <input type="url" class="settings-input" id="cloud-endpoint" placeholder="https://api.openai.com/v1" autocomplete="off">
+          <label class="settings-input-label">API Key</label>
+          <input type="password" class="settings-input" id="cloud-api-key" placeholder="sk-..." autocomplete="off">
+          <label class="settings-input-label">Model</label>
+          <input type="text" class="settings-input" id="cloud-model" placeholder="gpt-3.5-turbo" value="gpt-3.5-turbo" autocomplete="off">
+          <button class="settings-btn" id="save-cloud-config">Save Config</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Chat History</div>
+        <div class="settings-card" id="chat-history-list">
+          <div style="padding:14px 16px;color:var(--fg-dim);font-size:14px;">No conversations yet</div>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <div class="settings-section-title">Trust Dashboard</div>
         <div class="settings-card" id="trust-dashboard">
           <div class="trust-stat">
@@ -1297,7 +1383,7 @@
       </div>
 
       <div class="settings-about">
-        AI Space v0.1.0<br>
+        AI Space v0.2.0<br>
         Privacy-first personal AI<br>
         Your data never leaves your device in local mode.
       </div>
@@ -1317,7 +1403,7 @@
     }
 
     // Intersection Observer for scroll animations
-    const observer = new IntersectionObserver(function(entries) {
+    var observer = new IntersectionObserver(function(entries) {
       entries.forEach(function(entry) {
         if (entry.isIntersecting) {
           entry.target.classList.add('in-view');
@@ -1329,7 +1415,7 @@
       observer.observe(el);
     });
 
-    let appInitialized = false;
+    var appInitialized = false;
 
     function enterApp() {
       // Hide all landing sections

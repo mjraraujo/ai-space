@@ -50,6 +50,9 @@ async function initApp() {
   // Initialize memory in background — never block the UI
   initMemoryInBackground();
 
+  // Check for incoming shortcut data
+  handleIncomingShortcut();
+
   // Go straight to deciding the view — don't wait for memory
   console.log('[ai-space] checking WebGPU...');
   await startOnboarding();
@@ -69,9 +72,20 @@ function initMemoryInBackground() {
 
       // Load saved preferences
       const mode = await memory.getPreference('mode');
-      if (mode) state.mode = mode;
+      if (mode) {
+        state.mode = mode;
+        engine.mode = mode;
+      }
       const visited = await memory.getPreference('visited');
       if (visited) state.firstVisit = false;
+
+      // Load cloud config
+      const cloudEndpoint = await memory.getPreference('cloud_endpoint');
+      const cloudApiKey = await memory.getPreference('cloud_api_key');
+      const cloudModel = await memory.getPreference('cloud_model');
+      if (cloudEndpoint || cloudApiKey) {
+        engine.setCloudConfig(cloudEndpoint || '', cloudApiKey || '', cloudModel || '');
+      }
     } catch (err) {
       console.warn('[ai-space] memory init failed:', err);
       memoryReady = false;
@@ -107,12 +121,14 @@ async function startOnboarding() {
     } catch (err) {
       console.error('Model download failed:', err);
       state.mode = 'cloud';
+      engine.mode = 'cloud';
       savePref('mode', 'cloud');
       transition('chat');
     }
   } else {
     // No WebGPU — go straight to chat, cloud mode
     state.mode = 'cloud';
+    engine.mode = 'cloud';
     savePref('mode', 'cloud');
     await markVisited();
     transition('chat');
@@ -129,6 +145,7 @@ async function tryInitEngine() {
     const hasWebGPU = await engine.checkWebGPU();
     if (!hasWebGPU) {
       state.mode = 'cloud';
+      engine.mode = 'cloud';
       savePref('mode', 'cloud');
       return;
     }
@@ -219,6 +236,7 @@ function wireEventListeners() {
   const skipBtn = document.getElementById('skip-onboarding');
   if (skipBtn) skipBtn.addEventListener('click', () => {
     state.mode = 'cloud';
+    engine.mode = 'cloud';
     savePref('mode', 'cloud');
     markVisited();
     transition('chat');
@@ -245,6 +263,14 @@ function wireEventListeners() {
 
   const clearBtn = document.getElementById('clear-data');
   if (clearBtn) clearBtn.addEventListener('click', handleClearData);
+
+  // New conversation button
+  const newChatBtn = document.getElementById('new-chat-btn');
+  if (newChatBtn) newChatBtn.addEventListener('click', handleNewChat);
+
+  // Cloud config save
+  const saveCloudBtn = document.getElementById('save-cloud-config');
+  if (saveCloudBtn) saveCloudBtn.addEventListener('click', handleSaveCloudConfig);
 }
 
 /**
@@ -270,7 +296,8 @@ async function sendMessage(text) {
   const image = pendingImage;
   if (image) {
     pendingImage = null;
-    document.getElementById('image-preview').style.display = 'none';
+    const preview = document.getElementById('image-preview');
+    if (preview) preview.style.display = 'none';
   }
 
   state.messages.push({ role: 'user', content: text, image: image || undefined });
@@ -279,10 +306,15 @@ async function sendMessage(text) {
   state.isGenerating = true;
 
   await auditLog('context_read', { messageLength: text.length });
+  if (image) {
+    await auditLog('image_input', { hasImage: true });
+  }
 
   const engineStatus = engine.getStatus();
+  const canLocal = engineStatus.status === 'ready' && state.mode !== 'cloud';
+  const canCloud = (state.mode === 'cloud' || state.mode === 'hybrid') && engine.cloudConfigured;
 
-  if (engineStatus.status === 'ready' && state.mode !== 'cloud') {
+  if (canLocal) {
     // Local inference
     ui.showTyping(true);
     try {
@@ -301,27 +333,58 @@ async function sendMessage(text) {
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
-      const errorMsg = 'Sorry, something went wrong. Please try again.';
+      const errorMsg = 'Sorry, something went wrong: ' + err.message;
+      ui.renderMessage('assistant', errorMsg);
+      state.messages.push({ role: 'assistant', content: errorMsg });
+    }
+  } else if (canCloud) {
+    // Cloud inference
+    ui.showTyping(true);
+    await auditLog('cloud_call', { endpoint: engine.cloudEndpoint, model: engine.cloudModel });
+    try {
+      ui.showTyping(false);
+      ui.renderMessage('assistant', '', true);
+
+      let fullResponse = '';
+      await engine.chat(state.messages, (token, accumulated) => {
+        fullResponse = accumulated;
+        ui.updateStreamingMessage(accumulated);
+      });
+
+      ui.finalizeStreamingMessage();
+      state.messages.push({ role: 'assistant', content: fullResponse });
+      await auditLog('suggestion', { model: engine.cloudModel, responseLength: fullResponse.length, cloud: true });
+    } catch (err) {
+      ui.showTyping(false);
+      ui.finalizeStreamingMessage();
+      const errorMsg = 'Cloud error: ' + err.message;
       ui.renderMessage('assistant', errorMsg);
       state.messages.push({ role: 'assistant', content: errorMsg });
     }
   } else {
-    // Cloud mode or engine not ready
+    // No engine available
     ui.showTyping(true);
     await new Promise((r) => setTimeout(r, 400));
     ui.showTyping(false);
 
-    const msg = state.mode === 'cloud'
-      ? 'Cloud mode is not yet connected. Configure an API endpoint in settings to enable cloud inference.'
-      : 'The local model is still loading. Please wait a moment and try again.';
+    let msg;
+    if (state.mode === 'cloud' || state.mode === 'hybrid') {
+      msg = 'Cloud mode is not yet connected. Configure an API endpoint in Settings to enable cloud inference.';
+    } else {
+      msg = 'The local model is still loading. Please wait a moment and try again.';
+    }
 
     ui.renderMessage('assistant', msg);
     state.messages.push({ role: 'assistant', content: msg });
   }
 
-  // Save conversation
+  // Save conversation to chat_history
   if (memoryReady) {
-    try { await memory.saveConversation(state.conversationId, state.messages); } catch {}
+    try {
+      await memory.saveChatHistory(state.conversationId, state.messages);
+      // Also save to legacy conversations store for compatibility
+      await memory.saveConversation(state.conversationId, state.messages);
+    } catch {}
   }
 
   state.isGenerating = false;
@@ -334,11 +397,12 @@ async function sendMessage(text) {
  */
 async function setMode(mode) {
   state.mode = mode;
+  engine.mode = mode;
   try { audit.setMode(mode); } catch {}
   ui.updateModeSelector(mode);
   savePref('mode', mode);
 
-  if (mode === 'local' && engine.getStatus().status !== 'ready') {
+  if ((mode === 'local' || mode === 'hybrid') && engine.getStatus().status !== 'ready') {
     tryInitEngine();
   }
 
@@ -364,11 +428,94 @@ async function updateSettingsView() {
     try {
       cloudCalls = await audit.getCloudCallCount();
       const stats = await memory.getStats();
-      convCount = stats.conversations || 0;
+      convCount = (stats.chat_history || 0) + (stats.conversations || 0);
+    } catch {}
+
+    // Render chat history
+    try {
+      const convs = await memory.getConversations();
+      ui.renderChatHistory(convs, handleLoadConversation, handleDeleteConversation);
     } catch {}
   }
 
   ui.updateTrustDashboard(state.mode, cloudCalls, modelName, convCount);
+
+  // Update cloud config fields
+  const endpointEl = document.getElementById('cloud-endpoint');
+  const apiKeyEl = document.getElementById('cloud-api-key');
+  const modelEl = document.getElementById('cloud-model');
+  if (endpointEl && !endpointEl.value) endpointEl.value = engine.cloudEndpoint || '';
+  if (apiKeyEl && !apiKeyEl.value) apiKeyEl.value = engine.cloudApiKey || '';
+  if (modelEl && !modelEl.value) modelEl.value = engine.cloudModel || 'gpt-3.5-turbo';
+}
+
+/**
+ * Handle loading a past conversation
+ */
+async function handleLoadConversation(id) {
+  if (!memoryReady) return;
+
+  try {
+    const conv = await memory.loadConversation(id);
+    if (conv && conv.messages) {
+      state.conversationId = id;
+      state.messages = conv.messages;
+      ui.clearMessages();
+
+      // Re-render all messages
+      for (const msg of conv.messages) {
+        ui.renderMessage(msg.role, msg.content, false, msg.image);
+      }
+
+      ui.showView('chat');
+      ui.showNotification('Loaded conversation');
+    }
+  } catch (err) {
+    ui.showNotification('Failed to load conversation', 'error');
+  }
+}
+
+/**
+ * Handle deleting a conversation
+ */
+async function handleDeleteConversation(id) {
+  if (!memoryReady) return;
+
+  try {
+    await memory.deleteChatHistory(id);
+    await memory.deleteConversation(id);
+    updateSettingsView();
+    ui.showNotification('Conversation deleted');
+  } catch (err) {
+    ui.showNotification('Failed to delete', 'error');
+  }
+}
+
+/**
+ * Start a new conversation
+ */
+function handleNewChat() {
+  state.conversationId = null;
+  state.messages = [];
+  ui.clearMessages();
+  ui.showNotification('New conversation');
+}
+
+/**
+ * Save cloud configuration
+ */
+async function handleSaveCloudConfig() {
+  const endpoint = document.getElementById('cloud-endpoint')?.value?.trim() || '';
+  const apiKey = document.getElementById('cloud-api-key')?.value?.trim() || '';
+  const model = document.getElementById('cloud-model')?.value?.trim() || 'gpt-3.5-turbo';
+
+  engine.setCloudConfig(endpoint, apiKey, model);
+
+  savePref('cloud_endpoint', endpoint);
+  savePref('cloud_api_key', apiKey);
+  savePref('cloud_model', model);
+
+  ui.showNotification(endpoint ? 'Cloud config saved' : 'Cloud config cleared');
 }
 
 /**
@@ -397,6 +544,27 @@ async function handleShareTarget(urlParams) {
     }
   } catch {}
   return null;
+}
+
+/**
+ * Handle incoming shortcut data from URL params
+ */
+function handleIncomingShortcut() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const invocation = shortcuts.parseIncoming(urlParams);
+  if (invocation) {
+    const prompt = shortcuts.buildPrompt(invocation);
+    if (prompt) {
+      // Wait for app to be ready, then send
+      setTimeout(() => {
+        sendMessage(prompt);
+      }, 1500);
+    }
+    // Clean URL
+    if (window.history.replaceState) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }
 }
 
 /**
@@ -440,7 +608,10 @@ async function handleClearData() {
 }
 
 /**
- * Voice input — tap to record, tap to stop, auto-send
+ * Voice — tap to enter conversation mode, tap to exit
+ * 
+ * Conversation mode: continuous listen → detect silence → send → AI responds with TTS → resume listening
+ * One tap in, one tap out. Like talking to a person.
  */
 async function handleVoice() {
   const btn = document.getElementById('voice-btn');
@@ -451,51 +622,53 @@ async function handleVoice() {
     return;
   }
 
-  // If recording, stop and process
-  if (voice.isRecording) {
-    btn.classList.remove('active');
-    const result = await voice.stopRecording();
-
-    if (result.text) {
-      // Got text from SpeechRecognition — send it
-      await sendMessage(result.text);
-
-      // If AI responded and TTS is on, speak the response
-      const lastMsg = state.messages[state.messages.length - 1];
-      if (lastMsg && lastMsg.role === 'assistant') {
-        await voice.speak(lastMsg.content);
-      }
-    } else if (result.audio) {
-      // Got audio blob — would need Whisper API for transcription
-      // For now show a note
-      input.value = '[Voice message recorded — cloud transcription needed]';
-      ui.autoResizeInput();
-      ui.setSendEnabled(true);
-    }
+  // If already in conversation mode — exit
+  if (voice.conversationMode) {
+    voice.stopConversation();
+    input.value = '';
+    input.placeholder = 'Message...';
     return;
   }
 
-  // Start recording
+  // Enter conversation mode
   try {
-    // Show interim results in the input field
+    // Show interim text as user speaks
     voice.onInterimResult = (text) => {
       input.value = text;
       ui.autoResizeInput();
     };
 
-    await voice.startRecording();
-    btn.classList.add('active');
+    // When silence detected — auto-send and get voiced response
+    voice.onSilenceDetected = async (text) => {
+      if (!text.trim()) return;
+      input.value = '';
+
+      await auditLog('voice_input', { method: 'conversation', length: text.length });
+      await sendMessage(text);
+
+      // Speak AI response
+      const lastMsg = state.messages[state.messages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant' && voice.ttsEnabled) {
+        await voice.speak(lastMsg.content);
+      }
+
+      // Resume listening (conversation continues)
+      if (voice.conversationMode) {
+        voice.resumeListening();
+      }
+    };
+
+    await voice.startConversation();
     input.placeholder = 'Listening...';
     input.value = '';
   } catch (err) {
-    btn.classList.remove('active');
     input.placeholder = 'Message...';
     ui.showNotification('Mic error: ' + err.message, 'error');
   }
 }
 
 /**
- * Voice state change handler
+ * Voice state change — updates UI
  */
 voice.onStateChange = (s) => {
   const btn = document.getElementById('voice-btn');
@@ -508,16 +681,18 @@ voice.onStateChange = (s) => {
       input.placeholder = 'Listening...';
       break;
     case 'processing':
-      btn.classList.remove('active');
-      input.placeholder = 'Processing...';
+      btn.classList.add('active'); // keep red while processing
+      input.placeholder = 'Thinking...';
       break;
     case 'speaking':
+      btn.classList.add('active'); // keep red while speaking
       input.placeholder = 'Speaking...';
       break;
     default:
-      btn.classList.remove('active');
-      input.placeholder = 'Message...';
-      input.value = '';
+      if (!voice.conversationMode) {
+        btn.classList.remove('active');
+        input.placeholder = 'Message...';
+      }
   }
 };
 
@@ -532,10 +707,11 @@ async function handleCamera() {
 
     const preview = document.getElementById('image-preview');
     const previewImg = document.getElementById('preview-img');
-    previewImg.src = resized;
-    preview.style.display = 'block';
+    if (previewImg) previewImg.src = resized;
+    if (preview) preview.style.display = 'block';
 
     ui.setSendEnabled(true);
+    await auditLog('image_input', { size: img.size, type: img.type });
   } catch (err) {
     if (err.message !== 'No image') {
       ui.showNotification('Camera error: ' + err.message, 'error');

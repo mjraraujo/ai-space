@@ -1,29 +1,57 @@
 /**
- * Memory - Encrypted IndexedDB storage
+ * Memory - Encrypted IndexedDB storage with session isolation
  * AES-256-GCM via Web Crypto API with PBKDF2 key derivation
+ * 
+ * Each user session gets isolated storage via a random session ID.
+ * Stores: conversations, preferences, audit_log, shared_content, chat_history
  */
 
-const DB_NAME = 'ai-space-memory';
-const DB_VERSION = 1;
-const STORES = ['conversations', 'preferences', 'audit_log', 'shared_content'];
+const DB_VERSION = 2;
+const STORES = ['conversations', 'preferences', 'audit_log', 'shared_content', 'chat_history'];
+const PBKDF2_ITERATIONS = 10000;
 
 export class Memory {
   constructor() {
     this.db = null;
     this.cryptoKey = null;
+    this.sessionId = null;
   }
 
   /**
    * Initialize the database and derive encryption key
    */
   async init() {
+    this.sessionId = this._getOrCreateSessionId();
     this.cryptoKey = await this._deriveKey();
     this.db = await this._openDB();
     return true;
   }
 
   /**
-   * Derive encryption key from device fingerprint using PBKDF2
+   * Get or create a session ID for storage isolation
+   */
+  _getOrCreateSessionId() {
+    const key = 'ai-space-session-id';
+    let sessionId = localStorage.getItem(key);
+    if (!sessionId) {
+      // Generate a random session ID
+      const arr = new Uint8Array(16);
+      crypto.getRandomValues(arr);
+      sessionId = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+      localStorage.setItem(key, sessionId);
+    }
+    return sessionId;
+  }
+
+  /**
+   * Get the DB name scoped to this session
+   */
+  _getDBName() {
+    return `ai-space-${this.sessionId}`;
+  }
+
+  /**
+   * Derive encryption key from device fingerprint + session using PBKDF2
    */
   async _deriveKey() {
     const fingerprint = this._getDeviceFingerprint();
@@ -36,12 +64,12 @@ export class Memory {
       ['deriveBits', 'deriveKey']
     );
 
-    const salt = encoder.encode('ai-space-salt-v1');
+    const salt = encoder.encode('ai-space-salt-v1-' + this.sessionId);
     return crypto.subtle.deriveKey(
       {
         name: 'PBKDF2',
         salt,
-        iterations: 100000,
+        iterations: PBKDF2_ITERATIONS,
         hash: 'SHA-256'
       },
       keyMaterial,
@@ -61,17 +89,18 @@ export class Memory {
       screen.width + 'x' + screen.height,
       screen.colorDepth,
       Intl.DateTimeFormat().resolvedOptions().timeZone,
-      'ai-space-device-key'
+      'ai-space-device-key',
+      this.sessionId
     ];
     return components.join('|');
   }
 
   /**
-   * Open IndexedDB
+   * Open IndexedDB with all required stores
    */
   _openDB() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      const request = indexedDB.open(this._getDBName(), DB_VERSION);
 
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
@@ -206,7 +235,7 @@ export class Memory {
     });
   }
 
-  // --- Conversation methods ---
+  // --- Conversation methods (legacy store) ---
 
   async saveConversation(id, messages) {
     return this._put('conversations', id, { id, messages, updatedAt: Date.now() });
@@ -222,6 +251,77 @@ export class Memory {
 
   async deleteConversation(id) {
     return this._delete('conversations', id);
+  }
+
+  // --- Chat History methods (new enhanced store) ---
+
+  /**
+   * Save a chat to the chat_history store
+   * Auto-generates a title from the first user message if not provided
+   * @param {string} id - Conversation ID
+   * @param {Array} messages - Array of {role, content} message objects
+   * @param {string} [title] - Optional title, auto-generated if not provided
+   */
+  async saveChatHistory(id, messages, title) {
+    // Auto-generate title from first user message
+    if (!title) {
+      const firstUserMsg = messages.find(m => m.role === 'user');
+      if (firstUserMsg) {
+        title = firstUserMsg.content.substring(0, 50);
+        if (firstUserMsg.content.length > 50) {
+          title += '...';
+        }
+      } else {
+        title = 'New conversation';
+      }
+    }
+
+    // Check if conversation already exists (to preserve createdAt)
+    const existing = await this._get('chat_history', id);
+    const createdAt = (existing && existing.createdAt) ? existing.createdAt : Date.now();
+
+    const record = {
+      id,
+      title,
+      messages,
+      createdAt,
+      updatedAt: Date.now()
+    };
+
+    return this._put('chat_history', id, record);
+  }
+
+  /**
+   * Get list of past conversations (id, title, date) sorted by most recent
+   * @returns {Promise<Array<{id: string, title: string, createdAt: number, updatedAt: number}>>}
+   */
+  async getConversations() {
+    const all = await this._getAll('chat_history');
+    return all
+      .map(item => ({
+        id: item.id,
+        title: item.title || 'Untitled',
+        createdAt: item.createdAt || item._timestamp,
+        updatedAt: item.updatedAt || item._timestamp
+      }))
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+
+  /**
+   * Load full conversation including messages
+   * @param {string} id - Conversation ID
+   * @returns {Promise<{id: string, title: string, messages: Array, createdAt: number, updatedAt: number}|null>}
+   */
+  async loadConversation(id) {
+    return this._get('chat_history', id);
+  }
+
+  /**
+   * Delete a conversation from chat_history
+   * @param {string} id - Conversation ID
+   */
+  async deleteChatHistory(id) {
+    return this._delete('chat_history', id);
   }
 
   // --- Preferences methods ---

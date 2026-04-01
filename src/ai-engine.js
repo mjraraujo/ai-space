@@ -1,5 +1,14 @@
 /**
- * AI Engine - WebGPU local inference via web-llm
+ * AI Engine - WebGPU local inference via web-llm + Cloud mode
+ * 
+ * Modes:
+ *   - local: WebGPU via web-llm (on-device inference)
+ *   - cloud: fetch to user-configured OpenAI-compatible API endpoint
+ *   - hybrid: local by default, cloud when user explicitly requests
+ * 
+ * Cloud calls are ONLY made when:
+ *   1. Mode is 'cloud' or 'hybrid', AND
+ *   2. User triggered the action
  */
 
 const MODELS = {
@@ -20,7 +29,7 @@ const MODELS = {
   }
 };
 
-const SYSTEM_PROMPT = `You are a helpful, concise personal AI assistant running privately on the user's device. Keep responses clear and direct. You have no access to the internet or external services. Be honest about your limitations. Format responses for easy reading.`;
+const SYSTEM_PROMPT = `You are a helpful, concise personal AI assistant running privately on the user's device. Keep responses clear and direct. Be honest about your limitations. Format responses for easy reading.`;
 
 export class AIEngine {
   constructor() {
@@ -28,10 +37,17 @@ export class AIEngine {
     this.modelId = null;
     this.status = 'idle'; // idle | loading | ready | error
     this.webgpuAvailable = false;
+    this.mode = 'local'; // local | cloud | hybrid
+
+    // Cloud configuration
+    this.cloudEndpoint = '';
+    this.cloudApiKey = '';
+    this.cloudModel = 'gpt-3.5-turbo';
   }
 
   /**
    * Check WebGPU availability
+   * @returns {Promise<boolean>}
    */
   async checkWebGPU() {
     if (!navigator.gpu) {
@@ -49,9 +65,9 @@ export class AIEngine {
   }
 
   /**
-   * Initialize engine with a model
-   * @param {string} modelId - Model identifier
-   * @param {function} onProgress - Progress callback (progress: {text, progress})
+   * Initialize the local WebGPU engine with a model
+   * @param {string} [modelId] - Model identifier (defaults to first available)
+   * @param {function} [onProgress] - Progress callback ({text, progress})
    */
   async init(modelId, onProgress) {
     if (!modelId) {
@@ -92,14 +108,51 @@ export class AIEngine {
   }
 
   /**
-   * Stream a chat completion
-   * @param {Array} messages - Chat messages [{role, content}]
-   * @param {function} onToken - Streaming token callback
-   * @returns {string} Full response text
+   * Configure cloud API access
+   * Settings are stored in memory by the app layer.
+   * @param {string} endpoint - API base URL (e.g., https://api.openai.com/v1)
+   * @param {string} key - API key
+   * @param {string} [model] - Model name (default: gpt-3.5-turbo)
    */
-  async chat(messages, onToken) {
+  setCloudConfig(endpoint, key, model) {
+    this.cloudEndpoint = (endpoint || '').replace(/\/+$/, '');
+    this.cloudApiKey = key || '';
+    this.cloudModel = model || 'gpt-3.5-turbo';
+  }
+
+  /**
+   * Check if cloud is configured
+   */
+  get cloudConfigured() {
+    return !!(this.cloudEndpoint && this.cloudApiKey);
+  }
+
+  /**
+   * Send a chat and get response.
+   * Routes to local or cloud based on current mode.
+   * 
+   * @param {Array} messages - Chat messages [{role, content}]
+   * @param {function} [onToken] - Streaming token callback (token, accumulated)
+   * @param {object} [options] - { forceCloud: false }
+   * @returns {Promise<string>} Full response text
+   */
+  async chat(messages, onToken, options = {}) {
+    const useCloud = this.mode === 'cloud' ||
+      (this.mode === 'hybrid' && (options.forceCloud || this.status !== 'ready'));
+
+    if (useCloud) {
+      return this._chatCloud(messages, onToken);
+    } else {
+      return this._chatLocal(messages, onToken);
+    }
+  }
+
+  /**
+   * Local inference via web-llm
+   */
+  async _chatLocal(messages, onToken) {
     if (this.status !== 'ready' || !this.engine) {
-      throw new Error('Engine not ready. Call init() first.');
+      throw new Error('Local engine not ready. Call init() first or switch to cloud mode.');
     }
 
     const fullMessages = [
@@ -129,24 +182,116 @@ export class AIEngine {
 
       return fullResponse;
     } catch (err) {
-      throw new Error('Generation failed: ' + err.message);
+      throw new Error('Local generation failed: ' + err.message);
+    }
+  }
+
+  /**
+   * Cloud inference via OpenAI-compatible API
+   */
+  async _chatCloud(messages, onToken) {
+    if (!this.cloudEndpoint || !this.cloudApiKey) {
+      throw new Error('Cloud API not configured. Set endpoint and API key in settings.');
+    }
+
+    const fullMessages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...messages
+    ];
+
+    // Ensure endpoint has /chat/completions
+    let url = this.cloudEndpoint;
+    if (!url.endsWith('/chat/completions')) {
+      if (!url.endsWith('/')) url += '/';
+      url += 'chat/completions';
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.cloudApiKey}`
+        },
+        body: JSON.stringify({
+          model: this.cloudModel,
+          messages: fullMessages,
+          stream: true,
+          temperature: 0.7,
+          max_tokens: 1024
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        throw new Error(`Cloud API error (${response.status}): ${errorText}`);
+      }
+
+      // Handle streaming response (SSE)
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // keep incomplete line in buffer
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+          const data = trimmed.slice(6);
+          if (data === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta?.content || '';
+            if (delta) {
+              fullResponse += delta;
+              if (onToken) {
+                onToken(delta, fullResponse);
+              }
+            }
+          } catch {
+            // Skip malformed JSON chunks
+          }
+        }
+      }
+
+      return fullResponse;
+    } catch (err) {
+      if (err.message.startsWith('Cloud API error')) {
+        throw err;
+      }
+      throw new Error('Cloud API request failed: ' + err.message);
     }
   }
 
   /**
    * Get engine status
+   * @returns {object}
    */
   getStatus() {
     return {
       status: this.status,
+      mode: this.mode,
       modelId: this.modelId,
       modelInfo: this.modelId ? MODELS[this.modelId] : null,
-      webgpuAvailable: this.webgpuAvailable
+      webgpuAvailable: this.webgpuAvailable,
+      cloudConfigured: this.cloudConfigured,
+      cloudEndpoint: this.cloudEndpoint ? this.cloudEndpoint.replace(/\/.*$/, '/...') : '',
+      cloudModel: this.cloudModel
     };
   }
 
   /**
-   * Get available models
+   * Get available local models
+   * @returns {object}
    */
   static getModels() {
     return MODELS;

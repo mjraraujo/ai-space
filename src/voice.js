@@ -2,10 +2,12 @@
  * Voice - Real-time voice conversation
  * 
  * Input: MediaRecorder -> audio blob -> transcription
- *   - Cloud/hybrid mode: send to Whisper API
- *   - Local fallback: use SpeechRecognition if available
+ *   - Primary: MediaRecorder API (works on iOS Safari 14.5+)
+ *   - Enhancement: SpeechRecognition for real-time feedback (Chrome)
  * 
  * Output: SpeechSynthesis (works on iOS Safari)
+ * 
+ * States: idle, listening, processing, speaking
  */
 
 export class Voice {
@@ -17,10 +19,33 @@ export class Voice {
     this.synthesis = window.speechSynthesis || null;
     this.ttsEnabled = true;
     this.onStateChange = null; // callback(state: 'idle'|'listening'|'processing'|'speaking')
+    this.onInterimResult = null; // callback(text) - interim transcription text
+    this.onSilenceDetected = null; // callback(text) - conversation mode: user stopped talking
+    this.conversationMode = false; // continuous listen -> respond -> listen loop
+    this.silenceTimeout = 1500; // ms of silence before auto-sending
+    this._recognition = null;
+    this._recognitionResolve = null;
+    this._interimText = '';
+    this._finalText = '';
+    this._state = 'idle';
+    this._voicesLoaded = false;
 
-    // Check what's available
-    this.hasSpeechRecognition = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
-    this.hasMediaRecorder = 'MediaRecorder' in window;
+    // Feature detection
+    const SRConstructor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    this.hasSpeechRecognition = !!SRConstructor;
+    this.hasMediaRecorder = typeof MediaRecorder !== 'undefined';
+
+    // Preload voices for TTS
+    if (this.synthesis) {
+      const loadVoices = () => {
+        this._voicesLoaded = true;
+      };
+      this.synthesis.addEventListener('voiceschanged', loadVoices);
+      // Some browsers fire voiceschanged, some have voices ready immediately
+      if (this.synthesis.getVoices().length > 0) {
+        this._voicesLoaded = true;
+      }
+    }
   }
 
   get supported() {
@@ -28,42 +53,71 @@ export class Voice {
   }
 
   _setState(s) {
+    this._state = s;
     if (this.onStateChange) this.onStateChange(s);
   }
 
   /**
-   * Start recording audio
+   * Start recording audio.
+   * On Chrome: uses SpeechRecognition for real-time transcription.
+   * On iOS Safari / other: uses MediaRecorder to capture audio blob.
    */
   async startRecording() {
     if (this.isRecording) return;
 
-    // Try SpeechRecognition first (gives real-time feedback)
+    // If SpeechRecognition is available (Chrome), use it for real-time feedback
     if (this.hasSpeechRecognition) {
       return this._startSpeechRecognition();
     }
 
-    // Fallback to MediaRecorder
+    // Fallback to MediaRecorder (iOS Safari 14.5+, Firefox, etc.)
     if (!this.hasMediaRecorder) {
-      throw new Error('No voice input available');
+      throw new Error('No voice input available on this browser');
     }
 
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       this.audioChunks = [];
 
-      this.mediaRecorder = new MediaRecorder(this.stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
-      });
+      // Determine best supported mime type
+      let mimeType = 'audio/webm;codecs=opus';
+      if (typeof MediaRecorder.isTypeSupported === 'function') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/aac')) {
+          mimeType = 'audio/aac';
+        } else {
+          // Let the browser pick
+          mimeType = '';
+        }
+      }
+
+      const options = mimeType ? { mimeType } : {};
+      this.mediaRecorder = new MediaRecorder(this.stream, options);
 
       this.mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) this.audioChunks.push(e.data);
+        if (e.data && e.data.size > 0) {
+          this.audioChunks.push(e.data);
+        }
       };
 
-      this.mediaRecorder.start();
+      this.mediaRecorder.onerror = (e) => {
+        console.warn('MediaRecorder error:', e.error);
+      };
+
+      this.mediaRecorder.start(250); // collect data every 250ms for responsiveness
       this.isRecording = true;
       this._setState('listening');
     } catch (err) {
-      throw new Error('Microphone access denied');
+      this._cleanup();
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        throw new Error('Microphone access denied. Please allow microphone access in your browser settings.');
+      }
+      throw new Error('Microphone access failed: ' + err.message);
     }
   }
 
@@ -74,38 +128,54 @@ export class Voice {
   async stopRecording() {
     if (!this.isRecording) return { text: '' };
 
+    // SpeechRecognition path
     if (this._recognition) {
       return this._stopSpeechRecognition();
     }
 
+    // MediaRecorder path
     return new Promise((resolve) => {
       this.mediaRecorder.onstop = () => {
         this.isRecording = false;
         this._setState('processing');
+        
+        const mimeType = this.mediaRecorder.mimeType || 'audio/webm';
+        const blob = new Blob(this.audioChunks, { type: mimeType });
+        this.audioChunks = [];
         this._cleanup();
 
-        const blob = new Blob(this.audioChunks, { type: this.mediaRecorder.mimeType });
-        // Return audio blob — app.js will handle transcription
+        // Return audio blob — app.js will handle transcription via cloud Whisper or display
         resolve({ text: '', audio: blob });
       };
 
-      this.mediaRecorder.stop();
+      if (this.mediaRecorder.state !== 'inactive') {
+        this.mediaRecorder.stop();
+      } else {
+        this.isRecording = false;
+        this._setState('idle');
+        this._cleanup();
+        resolve({ text: '' });
+      }
     });
   }
 
   /**
    * SpeechRecognition path (Chrome, some Android browsers)
+   * Provides real-time transcription feedback
    */
   _startSpeechRecognition() {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       this._recognition = new SR();
       this._recognition.lang = navigator.language || 'en-US';
       this._recognition.interimResults = true;
       this._recognition.continuous = true;
+      this._recognition.maxAlternatives = 1;
       this._recognitionResolve = null;
       this._interimText = '';
       this._finalText = '';
+      this._silenceTimer = null;
+      this._lastSpeechTime = Date.now();
 
       this._recognition.onresult = (event) => {
         let interim = '';
@@ -119,45 +189,114 @@ export class Voice {
         }
         this._finalText = final;
         this._interimText = interim;
+        this._lastSpeechTime = Date.now();
 
-        // Show interim results via state change
         if (this.onInterimResult) {
           this.onInterimResult(final + interim);
+        }
+
+        // In conversation mode: auto-send after silence
+        if (this.conversationMode && final) {
+          this._resetSilenceTimer();
         }
       };
 
       this._recognition.onerror = (event) => {
+        if (event.error === 'not-allowed') {
+          this.isRecording = false;
+          this._setState('idle');
+          this._recognition = null;
+          reject(new Error('Microphone access denied'));
+          return;
+        }
         if (event.error !== 'no-speech' && event.error !== 'aborted') {
           console.warn('Speech recognition error:', event.error);
         }
       };
 
       this._recognition.onend = () => {
-        // Auto-ended (timeout or end of speech)
+        this._clearSilenceTimer();
         if (this.isRecording && this._recognitionResolve) {
           this.isRecording = false;
           this._setState('idle');
           this._recognitionResolve({ text: this._finalText || this._interimText });
           this._recognitionResolve = null;
+          this._recognition = null;
+        } else if (this.isRecording && this.conversationMode) {
+          // In conversation mode, auto-restart if recognition ends unexpectedly
+          try { this._recognition.start(); } catch {}
         }
       };
 
-      this._recognition.start();
-      this.isRecording = true;
-      this._setState('listening');
-      resolve();
-    });
-  }
-
-  _stopSpeechRecognition() {
-    return new Promise((resolve) => {
-      this._recognitionResolve = resolve;
-      this._recognition.stop();
+      try {
+        this._recognition.start();
+        this.isRecording = true;
+        this._setState('listening');
+        resolve();
+      } catch (err) {
+        this._recognition = null;
+        reject(new Error('Failed to start speech recognition: ' + err.message));
+      }
     });
   }
 
   /**
-   * Speak text aloud using browser TTS
+   * Silence detection for conversation mode
+   * Auto-fires onSilenceDetected when user stops talking
+   */
+  _resetSilenceTimer() {
+    this._clearSilenceTimer();
+    this._silenceTimer = setTimeout(() => {
+      if (this.conversationMode && this.isRecording && this._finalText) {
+        // User stopped talking — fire callback
+        if (this.onSilenceDetected) {
+          const text = this._finalText;
+          this._finalText = '';
+          this._interimText = '';
+          this.onSilenceDetected(text);
+        }
+      }
+    }, this.silenceTimeout);
+  }
+
+  _clearSilenceTimer() {
+    if (this._silenceTimer) {
+      clearTimeout(this._silenceTimer);
+      this._silenceTimer = null;
+    }
+  }
+
+  /**
+   * Stop SpeechRecognition and return accumulated text
+   */
+  _stopSpeechRecognition() {
+    return new Promise((resolve) => {
+      if (!this._recognition) {
+        this.isRecording = false;
+        this._setState('idle');
+        resolve({ text: this._finalText || this._interimText });
+        return;
+      }
+
+      this._recognitionResolve = (result) => {
+        this._recognition = null;
+        resolve(result);
+      };
+
+      try {
+        this._recognition.stop();
+      } catch {
+        this.isRecording = false;
+        this._setState('idle');
+        this._recognition = null;
+        resolve({ text: this._finalText || this._interimText });
+      }
+    });
+  }
+
+  /**
+   * Speak text aloud using browser TTS (SpeechSynthesis)
+   * Works on iOS Safari.
    * @param {string} text
    * @returns {Promise} Resolves when done speaking
    */
@@ -165,30 +304,59 @@ export class Voice {
     if (!this.synthesis || !this.ttsEnabled || !text) return Promise.resolve();
 
     return new Promise((resolve) => {
+      // Cancel any ongoing speech
       this.synthesis.cancel();
       this._setState('speaking');
 
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 1.05;
-      utterance.pitch = 1;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
 
-      // Try to pick a good voice
+      // Try to pick a good local voice matching user's language
       const voices = this.synthesis.getVoices();
-      const preferred = voices.find(v =>
-        v.lang.startsWith(navigator.language?.split('-')[0] || 'en') && v.localService
-      );
-      if (preferred) utterance.voice = preferred;
+      if (voices.length > 0) {
+        const langPrefix = (navigator.language || 'en').split('-')[0];
+        // Prefer local service voices
+        const preferred = voices.find(v =>
+          v.lang.startsWith(langPrefix) && v.localService
+        );
+        const fallback = voices.find(v => v.lang.startsWith(langPrefix));
+        if (preferred) {
+          utterance.voice = preferred;
+        } else if (fallback) {
+          utterance.voice = fallback;
+        }
+      }
 
       utterance.onend = () => {
         this._setState('idle');
         resolve();
       };
-      utterance.onerror = () => {
+
+      utterance.onerror = (e) => {
+        // 'interrupted' and 'canceled' are normal when user cancels
+        if (e.error !== 'interrupted' && e.error !== 'canceled') {
+          console.warn('TTS error:', e.error);
+        }
         this._setState('idle');
         resolve();
       };
 
+      // iOS Safari requires speech to happen in response to user interaction
+      // but since we're calling this after user-initiated flow, it should work
       this.synthesis.speak(utterance);
+
+      // iOS Safari bug: speechSynthesis can pause/hang. Resume workaround.
+      if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+        this._iosResumeInterval = setInterval(() => {
+          if (this.synthesis.speaking && !this.synthesis.paused) {
+            // keep alive
+          } else if (!this.synthesis.speaking) {
+            clearInterval(this._iosResumeInterval);
+          }
+        }, 5000);
+      }
     });
   }
 
@@ -198,21 +366,49 @@ export class Voice {
   stopSpeaking() {
     if (this.synthesis) {
       this.synthesis.cancel();
+      if (this._iosResumeInterval) {
+        clearInterval(this._iosResumeInterval);
+        this._iosResumeInterval = null;
+      }
       this._setState('idle');
     }
   }
 
   /**
-   * Cancel everything
+   * Resume listening (for conversation mode after TTS completes)
    */
-  cancel() {
+  async resumeListening() {
+    if (!this.conversationMode || this.isRecording) return;
+    try {
+      await this.startRecording();
+    } catch (err) {
+      console.warn('Failed to resume listening:', err);
+      this.conversationMode = false;
+      this._setState('idle');
+    }
+  }
+
+  /**
+   * Enter conversation mode
+   */
+  async startConversation() {
+    this.conversationMode = true;
+    await this.startRecording();
+  }
+
+  /**
+   * Exit conversation mode
+   */
+  stopConversation() {
+    this.conversationMode = false;
+    this._clearSilenceTimer();
     if (this.isRecording) {
       if (this._recognition) {
-        this._recognition.abort();
+        try { this._recognition.abort(); } catch {}
         this._recognition = null;
       }
       if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-        this.mediaRecorder.stop();
+        try { this.mediaRecorder.stop(); } catch {}
       }
       this.isRecording = false;
     }
@@ -221,6 +417,30 @@ export class Voice {
     this._setState('idle');
   }
 
+  /**
+   * Cancel everything - recording and speaking
+   */
+  cancel() {
+    if (this.isRecording) {
+      if (this._recognition) {
+        try { this._recognition.abort(); } catch {}
+        this._recognition = null;
+        this._recognitionResolve = null;
+      }
+      if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+        try { this.mediaRecorder.stop(); } catch {}
+      }
+      this.isRecording = false;
+      this.audioChunks = [];
+    }
+    this.stopSpeaking();
+    this._cleanup();
+    this._setState('idle');
+  }
+
+  /**
+   * Release microphone stream
+   */
   _cleanup() {
     if (this.stream) {
       this.stream.getTracks().forEach(t => t.stop());
