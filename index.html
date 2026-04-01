@@ -1269,8 +1269,11 @@
       enterBtn.addEventListener('click', enterApp);
     }
 
-    // Returning user — skip landing
-    if (localStorage.getItem('ai-space-entered')) {
+    // Skip landing if: returning user OR running as installed PWA
+    var isStandalone = window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true;
+
+    if (isStandalone || localStorage.getItem('ai-space-entered')) {
       enterApp();
     }
   </script>
