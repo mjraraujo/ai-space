@@ -34,12 +34,13 @@
       --safe-right: env(safe-area-inset-right, 0px);
     }
 
-    html, body {
+    html {
       height: 100%;
-      overflow: hidden;
+      scroll-behavior: smooth;
     }
 
     body {
+      min-height: 100%;
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
       background: var(--bg);
       color: var(--fg);
@@ -47,7 +48,360 @@
       -moz-osx-font-smoothing: grayscale;
     }
 
-    /* View management */
+    /* === LANDING PAGE === */
+    body.landing-mode {
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    body.app-mode {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body.app-mode html {
+      overflow: hidden;
+    }
+
+    .landing-section {
+      opacity: 0;
+      transform: translateY(40px);
+      transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .landing-section.in-view {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .landing-hidden {
+      display: none !important;
+    }
+
+    /* HERO */
+    .hero {
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      padding-top: calc(24px + var(--safe-top));
+      position: relative;
+    }
+
+    .hero-title {
+      font-size: clamp(3rem, 12vw, 9rem);
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 0.95;
+      margin-bottom: 24px;
+      background: linear-gradient(180deg, #ffffff 0%, #999999 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-subtitle {
+      font-size: clamp(1.1rem, 3vw, 1.6rem);
+      font-weight: 300;
+      color: var(--fg-muted);
+      letter-spacing: -0.01em;
+      margin-bottom: 20px;
+    }
+
+    .hero-desc {
+      font-size: clamp(0.9rem, 2vw, 1.05rem);
+      color: var(--fg-dim);
+      max-width: 480px;
+      line-height: 1.6;
+      margin-bottom: 48px;
+    }
+
+    .hero-cta {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 16px 36px;
+      font-size: 16px;
+      font-weight: 500;
+      font-family: inherit;
+      color: var(--bg);
+      background: var(--fg);
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.3s ease;
+      letter-spacing: -0.01em;
+    }
+
+    .hero-cta:hover {
+      transform: scale(1.04);
+      box-shadow: 0 0 40px rgba(255, 255, 255, 0.15), 0 0 80px rgba(255, 255, 255, 0.05);
+    }
+
+    .hero-cta:active {
+      transform: scale(0.98);
+    }
+
+    @keyframes ctaPulse {
+      0%, 100% { box-shadow: 0 0 20px rgba(255, 255, 255, 0.05); }
+      50% { box-shadow: 0 0 30px rgba(255, 255, 255, 0.12); }
+    }
+
+    .hero-cta {
+      animation: ctaPulse 3s ease-in-out infinite;
+    }
+
+    .hero-cta:hover {
+      animation: none;
+    }
+
+    .hero-footer {
+      position: absolute;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      color: var(--fg-dim);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      opacity: 0.5;
+      white-space: nowrap;
+    }
+
+    .scroll-hint {
+      position: absolute;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      opacity: 0.3;
+      animation: scrollBounce 2s ease-in-out infinite;
+    }
+
+    .scroll-hint-line {
+      width: 1px;
+      height: 24px;
+      background: linear-gradient(to bottom, transparent, var(--fg-muted));
+    }
+
+    @keyframes scrollBounce {
+      0%, 100% { transform: translateX(-50%) translateY(0); }
+      50% { transform: translateX(-50%) translateY(8px); }
+    }
+
+    /* FEATURES */
+    .section {
+      padding: 80px 24px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .section-large {
+      padding: 100px 24px;
+    }
+
+    .features-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 48px;
+    }
+
+    .feature {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+    }
+
+    .feature-icon {
+      font-size: 28px;
+      flex-shrink: 0;
+      width: 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      border-radius: 14px;
+      border: 1px solid var(--border);
+    }
+
+    .feature-content h3 {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+
+    .feature-content p {
+      font-size: 15px;
+      color: var(--fg-muted);
+      line-height: 1.5;
+    }
+
+    /* HOW IT WORKS */
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 36px;
+      counter-reset: step;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+      counter-increment: step;
+    }
+
+    .step-number {
+      width: 40px;
+      height: 40px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--bg);
+      background: var(--fg);
+      border-radius: 50%;
+    }
+
+    .step-content h3 {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
+    }
+
+    .step-content p {
+      font-size: 15px;
+      color: var(--fg-muted);
+      line-height: 1.5;
+    }
+
+    .section-title {
+      font-size: clamp(1.5rem, 5vw, 2.2rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 48px;
+    }
+
+    .section-title-muted {
+      color: var(--fg-muted);
+      font-weight: 400;
+    }
+
+    /* MODES */
+    .modes-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+
+    @media (min-width: 600px) {
+      .modes-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    .mode-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      transition: border-color 0.3s ease, transform 0.2s ease;
+    }
+
+    .mode-card:hover {
+      border-color: #333;
+      transform: translateY(-2px);
+    }
+
+    .mode-card-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--fg-dim);
+      margin-bottom: 8px;
+    }
+
+    .mode-card h3 {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+
+    .mode-card p {
+      font-size: 14px;
+      color: var(--fg-muted);
+      line-height: 1.5;
+    }
+
+    /* TRUST */
+    .trust-section {
+      text-align: center;
+      max-width: 520px;
+      margin: 0 auto;
+      padding: 80px 24px;
+    }
+
+    .trust-icon {
+      font-size: 40px;
+      margin-bottom: 24px;
+      opacity: 0.7;
+    }
+
+    .trust-title {
+      font-size: clamp(1.4rem, 4vw, 2rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 16px;
+    }
+
+    .trust-text {
+      font-size: 15px;
+      color: var(--fg-muted);
+      line-height: 1.7;
+    }
+
+    /* FOOTER */
+    .landing-footer {
+      text-align: center;
+      padding: 48px 24px;
+      border-top: 1px solid var(--border);
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .landing-footer p {
+      font-size: 14px;
+      color: var(--fg-dim);
+      line-height: 1.8;
+    }
+
+    .landing-footer a {
+      color: var(--fg-muted);
+      text-decoration: none;
+      border-bottom: 1px solid var(--fg-dim);
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    .landing-footer a:hover {
+      color: var(--fg);
+      border-color: var(--fg);
+    }
+
+    /* === APP VIEWS === */
     .view {
       display: none;
       position: absolute;
@@ -68,12 +422,13 @@
       opacity: 1;
     }
 
-    /* Onboarding */
+    /* Onboarding / Download Progress */
     #onboarding {
       align-items: center;
       justify-content: center;
       padding: 24px;
       padding-top: var(--safe-top);
+      z-index: 10;
     }
 
     .onboarding-title {
@@ -92,7 +447,7 @@
       align-items: center;
       gap: 16px;
       opacity: 0;
-      animation: fadeIn 0.6s ease 1.6s forwards;
+      animation: fadeIn 0.6s ease 0.5s forwards;
     }
 
     .progress-ring {
@@ -135,7 +490,7 @@
       padding: 8px 16px;
       transition: color 0.2s;
       opacity: 0;
-      animation: fadeIn 0.6s ease 2s forwards;
+      animation: fadeIn 0.6s ease 1s forwards;
     }
 
     .onboarding-skip:hover {
@@ -521,10 +876,122 @@
     }
   </style>
 </head>
-<body>
-  <!-- Onboarding View -->
-  <div id="onboarding" class="view active visible">
-    <div class="onboarding-title">This is your space.</div>
+<body class="landing-mode">
+
+  <!-- ========== LANDING PAGE ========== -->
+
+  <!-- HERO -->
+  <section class="hero landing-section in-view" id="landing-hero">
+    <h1 class="hero-title">AI Space</h1>
+    <p class="hero-subtitle">Your space. Your AI. Your device.</p>
+    <p class="hero-desc">A privacy-first personal AI that lives entirely on your phone. No cloud. No account. No app store.</p>
+    <button class="hero-cta" id="enter-app">Enter your space →</button>
+    <div class="scroll-hint">
+      <div class="scroll-hint-line"></div>
+    </div>
+    <div class="hero-footer">Works offline · Runs locally · Yours forever</div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="section section-large landing-section" id="landing-features">
+    <h2 class="section-title">Built different.</h2>
+    <div class="features-grid">
+      <div class="feature">
+        <div class="feature-icon">🔒</div>
+        <div class="feature-content">
+          <h3>Private by default</h3>
+          <p>Your data never leaves your device. Zero cloud. Zero tracking.</p>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-content">
+          <h3>Runs locally</h3>
+          <p>AI model runs directly on your phone using WebGPU. No internet needed.</p>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔗</div>
+        <div class="feature-content">
+          <h3>Device connected</h3>
+          <p>iOS Shortcuts relay gives your AI eyes and hands on your phone.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="section landing-section" id="landing-how">
+    <h2 class="section-title">Three steps. <span class="section-title-muted">That's it.</span></h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h3>Open this link</h3>
+          <p>That's the install. No app store needed.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h3>Choose your model</h3>
+          <p>Downloads once, cached forever.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h3>It's yours</h3>
+          <p>Fully offline. Encrypted memory. Complete privacy.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MODES -->
+  <section class="section section-large landing-section" id="landing-modes">
+    <h2 class="section-title">Your rules.</h2>
+    <div class="modes-grid">
+      <div class="mode-card">
+        <div class="mode-card-label">Zero Trust</div>
+        <h3>Local</h3>
+        <p>Everything on device. No network calls. Ever.</p>
+      </div>
+      <div class="mode-card">
+        <div class="mode-card-label">Smart</div>
+        <h3>Hybrid</h3>
+        <p>Quick tasks local, heavy reasoning via cloud. You approve each call.</p>
+      </div>
+      <div class="mode-card">
+        <div class="mode-card-label">Max Power</div>
+        <h3>Cloud</h3>
+        <p>Full cloud AI. Fastest, smartest. Your choice.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- TRUST -->
+  <section class="trust-section landing-section" id="landing-trust">
+    <div class="trust-icon">🛡️</div>
+    <h2 class="trust-title">See everything. Control everything.</h2>
+    <p class="trust-text">Every API call logged. Every byte of data accounted for. Full audit trail, client-side encryption, and total transparency. You don't have to trust us — you can verify.</p>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="landing-footer landing-section" id="landing-footer">
+    <p>
+      Open source. MIT License.<br>
+      <a href="https://github.com/mjraraujo/ai-space" target="_blank" rel="noopener">View on GitHub</a>
+    </p>
+    <p style="margin-top: 12px;">Built for people who want AI without surveillance.</p>
+  </footer>
+
+
+  <!-- ========== APP VIEWS ========== -->
+
+  <!-- Onboarding / Download Progress View -->
+  <div id="onboarding" class="view">
+    <div class="onboarding-title">Preparing your space...</div>
     <div class="onboarding-progress">
       <svg class="progress-ring" viewBox="0 0 64 64">
         <circle class="progress-ring-circle" cx="32" cy="32" r="28"/>
@@ -640,10 +1107,68 @@
   <!-- Toast -->
   <div class="toast" id="toast"></div>
 
+  <!-- Landing page logic -->
+  <script>
+    (function() {
+      // Intersection Observer for scroll animations
+      const observer = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('in-view');
+          }
+        });
+      }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
+
+      document.querySelectorAll('.landing-section:not(.in-view)').forEach(function(el) {
+        observer.observe(el);
+      });
+
+      // Enter app button
+      var enterBtn = document.getElementById('enter-app');
+      if (enterBtn) {
+        enterBtn.addEventListener('click', function() {
+          enterApp();
+        });
+      }
+
+      function enterApp() {
+        // Hide all landing sections
+        document.querySelectorAll('.landing-section').forEach(function(el) {
+          el.classList.add('landing-hidden');
+        });
+
+        // Switch body mode
+        document.body.classList.remove('landing-mode');
+        document.body.classList.add('app-mode');
+        document.documentElement.style.height = '100%';
+        document.documentElement.style.overflow = 'hidden';
+
+        // Show onboarding/download view
+        var onboarding = document.getElementById('onboarding');
+        onboarding.classList.add('active');
+        setTimeout(function() {
+          onboarding.classList.add('visible');
+        }, 50);
+      }
+
+      // Check if already initialized (returning user)
+      if (localStorage.getItem('ai-space-entered')) {
+        enterApp();
+      }
+
+      // Mark as entered on CTA click
+      if (enterBtn) {
+        enterBtn.addEventListener('click', function() {
+          localStorage.setItem('ai-space-entered', 'true');
+        });
+      }
+    })();
+  </script>
+
   <script type="module" src="/src/app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/sw.js').catch(function() {});
     }
   </script>
 </body>
