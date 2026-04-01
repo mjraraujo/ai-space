@@ -10,8 +10,8 @@ import { UI } from './ui.js';
 
 // State
 const state = {
-  phase: 'onboarding', // onboarding | downloading | ready | chat
-  mode: 'local',       // local | hybrid | cloud
+  phase: 'onboarding',
+  mode: 'local',
   conversationId: null,
   messages: [],
   isGenerating: false,
@@ -24,43 +24,60 @@ const memory = new Memory();
 const audit = new Audit();
 const shortcuts = new Shortcuts();
 let ui = null;
+let memoryReady = false;
 
 /**
  * Initialize the application
  */
 async function initApp() {
-  ui = new UI();
-
-  // Initialize memory and audit
   try {
-    await memory.init();
-    await audit.init(memory);
+    ui = new UI();
   } catch (err) {
-    console.error('Failed to init storage:', err);
+    console.error('UI init failed:', err);
+    return;
+  }
+
+  // Initialize memory (non-blocking — don't let it hang the app)
+  try {
+    const memPromise = memory.init();
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000));
+    await Promise.race([memPromise, timeout]);
+    await audit.init(memory);
+    memoryReady = true;
+  } catch (err) {
+    console.warn('Memory init failed or timed out, continuing without encryption:', err);
+    memoryReady = false;
   }
 
   // Load preferences
-  await loadPreferences();
-
-  // Check for share target or shortcut invocation
-  const urlParams = new URLSearchParams(window.location.search);
-  const sharedContent = await handleShareTarget(urlParams);
-  const skillInvocation = shortcuts.parseIncoming(urlParams);
-
-  // Clean URL
-  if (urlParams.toString()) {
-    window.history.replaceState({}, '', '/');
+  if (memoryReady) {
+    try {
+      const mode = await memory.getPreference('mode');
+      if (mode) state.mode = mode;
+      const visited = await memory.getPreference('visited');
+      state.firstVisit = !visited;
+    } catch {
+      // Use defaults
+    }
   }
 
   // Wire event listeners
   wireEventListeners();
 
-  // Decide initial view
-  if (!state.firstVisit) {
-    transition('chat');
-    await initEngine();
+  // Check for share target
+  const urlParams = new URLSearchParams(window.location.search);
+  const sharedContent = await handleShareTarget(urlParams);
+  const skillInvocation = shortcuts.parseIncoming(urlParams);
+  if (urlParams.toString()) {
+    window.history.replaceState({}, '', window.location.pathname);
+  }
 
-    // Handle incoming data
+  // Decide flow
+  if (!state.firstVisit) {
+    // Returning user — go straight to chat
+    transition('chat');
+    tryInitEngine();
+
     if (sharedContent) {
       sendMessage(sharedContent);
     } else if (skillInvocation) {
@@ -68,118 +85,105 @@ async function initApp() {
       if (prompt) sendMessage(prompt);
     }
   } else {
-    transition('onboarding');
-    startOnboarding();
+    // First visit — check WebGPU and decide
+    await startOnboarding();
   }
 }
 
 /**
- * Load saved preferences
+ * Start onboarding
  */
-async function loadPreferences() {
-  try {
-    const mode = await memory.getPreference('mode');
-    if (mode) state.mode = mode;
+async function startOnboarding() {
+  ui.updateProgress(0, 'Checking device...');
 
-    const visited = await memory.getPreference('visited');
-    state.firstVisit = !visited;
+  let hasWebGPU = false;
+  try {
+    hasWebGPU = await engine.checkWebGPU();
   } catch {
-    // Use defaults
+    hasWebGPU = false;
+  }
+
+  if (hasWebGPU) {
+    ui.updateProgress(5, 'WebGPU ready. Downloading model...');
+    await markVisited();
+    transition('downloading');
+    try {
+      await engine.init(null, (progress) => {
+        const pct = Math.round((progress.progress || 0) * 100);
+        ui.updateProgress(pct, progress.text || 'Downloading...');
+      });
+      await auditLog('model_load', { model: engine.getStatus().modelId, success: true });
+      ui.updateProgress(100, 'Ready.');
+      setTimeout(() => transition('chat'), 400);
+    } catch (err) {
+      console.error('Model download failed:', err);
+      state.mode = 'cloud';
+      savePref('mode', 'cloud');
+      transition('chat');
+    }
+  } else {
+    // No WebGPU — go straight to chat, cloud mode
+    state.mode = 'cloud';
+    savePref('mode', 'cloud');
+    await markVisited();
+    transition('chat');
   }
 }
 
 /**
- * Transition to a new phase
+ * Try to init engine in background (for returning users)
+ */
+async function tryInitEngine() {
+  if (state.mode === 'cloud') return;
+
+  try {
+    const hasWebGPU = await engine.checkWebGPU();
+    if (!hasWebGPU) {
+      state.mode = 'cloud';
+      savePref('mode', 'cloud');
+      return;
+    }
+    await engine.init(null, () => {});
+    await auditLog('model_load', { model: engine.getStatus().modelId, success: true });
+  } catch (err) {
+    console.warn('Engine init failed in background:', err);
+  }
+}
+
+/**
+ * Transition views
  */
 function transition(phase) {
   state.phase = phase;
-
-  switch (phase) {
-    case 'onboarding':
-      ui.showView('onboarding');
-      break;
-    case 'downloading':
-      ui.showView('onboarding');
-      break;
-    case 'ready':
-    case 'chat':
-      ui.showView('chat');
-      state.phase = 'chat';
-      break;
-  }
-}
-
-/**
- * Start onboarding flow
- */
-async function startOnboarding() {
-  ui.updateProgress(0, 'Checking device capabilities...');
-
-  const hasWebGPU = await engine.checkWebGPU();
-
-  if (hasWebGPU) {
-    ui.updateProgress(5, 'WebGPU available. Ready to download model.');
-    setTimeout(() => initEngine(), 1500);
+  if (phase === 'onboarding' || phase === 'downloading') {
+    ui.showView('onboarding');
   } else {
-    // No WebGPU — skip straight to chat in cloud mode, no waiting
-    state.mode = 'cloud';
-    try { await memory.savePreference('mode', 'cloud'); } catch {}
-    markVisited();
-    transition('chat');
+    ui.showView('chat');
   }
 }
 
 /**
- * Initialize the AI engine
- */
-async function initEngine() {
-  if (state.mode === 'cloud') {
-    markVisited();
-    transition('chat');
-    return;
-  }
-
-  transition('downloading');
-  ui.updateProgress(5, 'Downloading model...');
-
-  try {
-    await engine.init(null, (progress) => {
-      const pct = Math.round((progress.progress || 0) * 100);
-      ui.updateProgress(pct, progress.text);
-    });
-
-    await audit.log('model_load', {
-      model: engine.getStatus().modelId,
-      success: true
-    });
-
-    ui.updateProgress(100, 'Ready.');
-    markVisited();
-
-    setTimeout(() => transition('chat'), 500);
-  } catch (err) {
-    console.error('Engine init failed:', err);
-    ui.updateProgress(0, 'Model download failed. You can still use cloud mode.');
-    ui.showNotification('Model failed to load: ' + err.message, 'error');
-
-    // Allow proceeding anyway
-    setTimeout(() => {
-      markVisited();
-      transition('chat');
-    }, 3000);
-  }
-}
-
-/**
- * Mark first visit as complete
+ * Mark first visit done
  */
 async function markVisited() {
   state.firstVisit = false;
-  try {
-    await memory.savePreference('visited', true);
-  } catch {
-    // Non-critical
-  }
+  savePref('visited', true);
+}
+
+/**
+ * Safe preference save
+ */
+async function savePref(key, value) {
+  if (!memoryReady) return;
+  try { await memory.savePreference(key, value); } catch {}
+}
+
+/**
+ * Safe audit log
+ */
+async function auditLog(type, details) {
+  if (!memoryReady) return;
+  try { await audit.log(type, details); } catch {}
 }
 
 /**
@@ -187,56 +191,60 @@ async function markVisited() {
  */
 function wireEventListeners() {
   // Send message
-  document.getElementById('send-btn').addEventListener('click', handleSend);
+  const sendBtn = document.getElementById('send-btn');
+  if (sendBtn) sendBtn.addEventListener('click', handleSend);
 
   // Input handling
   const input = document.getElementById('chat-input');
-  input.addEventListener('input', () => {
-    ui.autoResizeInput();
-    ui.setSendEnabled(input.value.trim().length > 0 && !state.isGenerating);
-  });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (input.value.trim() && !state.isGenerating) {
-        handleSend();
+  if (input) {
+    input.addEventListener('input', () => {
+      ui.autoResizeInput();
+      ui.setSendEnabled(input.value.trim().length > 0 && !state.isGenerating);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (input.value.trim() && !state.isGenerating) handleSend();
       }
-    }
-  });
+    });
+  }
 
   // Settings
-  document.getElementById('open-settings').addEventListener('click', () => {
+  const openSettings = document.getElementById('open-settings');
+  if (openSettings) openSettings.addEventListener('click', () => {
     updateSettingsView();
     ui.showView('settings');
   });
 
-  document.getElementById('close-settings').addEventListener('click', () => {
-    ui.showView('chat');
-  });
+  const closeSettings = document.getElementById('close-settings');
+  if (closeSettings) closeSettings.addEventListener('click', () => ui.showView('chat'));
 
   // Mode selector
-  document.getElementById('mode-selector').addEventListener('click', (e) => {
+  const modeSelector = document.getElementById('mode-selector');
+  if (modeSelector) modeSelector.addEventListener('click', (e) => {
     const option = e.target.closest('.mode-option');
-    if (option && option.dataset.mode) {
-      setMode(option.dataset.mode);
-    }
+    if (option && option.dataset.mode) setMode(option.dataset.mode);
   });
 
   // Skip onboarding
-  document.getElementById('skip-onboarding').addEventListener('click', () => {
-    markVisited();
+  const skipBtn = document.getElementById('skip-onboarding');
+  if (skipBtn) skipBtn.addEventListener('click', () => {
     state.mode = 'cloud';
-    memory.savePreference('mode', 'cloud');
+    savePref('mode', 'cloud');
+    markVisited();
     transition('chat');
   });
 
   // Data management
-  document.getElementById('export-data').addEventListener('click', handleExport);
-  document.getElementById('clear-data').addEventListener('click', handleClearData);
+  const exportBtn = document.getElementById('export-data');
+  if (exportBtn) exportBtn.addEventListener('click', handleExport);
+
+  const clearBtn = document.getElementById('clear-data');
+  if (clearBtn) clearBtn.addEventListener('click', handleClearData);
 }
 
 /**
- * Handle send button click
+ * Handle send
  */
 function handleSend() {
   const text = ui.getInputValue();
@@ -250,26 +258,22 @@ function handleSend() {
 async function sendMessage(text) {
   if (state.isGenerating) return;
 
-  // Create conversation ID if needed
   if (!state.conversationId) {
     state.conversationId = `conv_${Date.now()}`;
   }
 
-  // Add user message
   state.messages.push({ role: 'user', content: text });
   ui.renderMessage('user', text);
   ui.setSendEnabled(false);
   state.isGenerating = true;
 
-  await audit.log('context_read', { messageLength: text.length });
+  await auditLog('context_read', { messageLength: text.length });
 
-  // Generate response
   const engineStatus = engine.getStatus();
 
   if (engineStatus.status === 'ready' && state.mode !== 'cloud') {
     // Local inference
     ui.showTyping(true);
-
     try {
       ui.showTyping(false);
       ui.renderMessage('assistant', '', true);
@@ -282,44 +286,36 @@ async function sendMessage(text) {
 
       ui.finalizeStreamingMessage();
       state.messages.push({ role: 'assistant', content: fullResponse });
-
-      await audit.log('suggestion', {
-        model: engineStatus.modelId,
-        responseLength: fullResponse.length
-      });
+      await auditLog('suggestion', { model: engineStatus.modelId, responseLength: fullResponse.length });
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
-      const errorMsg = 'Sorry, I encountered an error. Please try again.';
+      const errorMsg = 'Sorry, something went wrong. Please try again.';
       ui.renderMessage('assistant', errorMsg);
       state.messages.push({ role: 'assistant', content: errorMsg });
-      ui.showNotification('Generation error: ' + err.message, 'error');
     }
   } else {
-    // Cloud mode or engine not ready - show placeholder
+    // Cloud mode or engine not ready
     ui.showTyping(true);
-
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 400));
     ui.showTyping(false);
 
-    const cloudMsg = state.mode === 'cloud'
+    const msg = state.mode === 'cloud'
       ? 'Cloud mode is not yet connected. Configure an API endpoint in settings to enable cloud inference.'
       : 'The local model is still loading. Please wait a moment and try again.';
 
-    ui.renderMessage('assistant', cloudMsg);
-    state.messages.push({ role: 'assistant', content: cloudMsg });
+    ui.renderMessage('assistant', msg);
+    state.messages.push({ role: 'assistant', content: msg });
   }
 
   // Save conversation
-  try {
-    await memory.saveConversation(state.conversationId, state.messages);
-  } catch {
-    // Non-critical
+  if (memoryReady) {
+    try { await memory.saveConversation(state.conversationId, state.messages); } catch {}
   }
 
   state.isGenerating = false;
   const inputEl = document.getElementById('chat-input');
-  ui.setSendEnabled(inputEl.value.trim().length > 0);
+  if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
 }
 
 /**
@@ -327,18 +323,12 @@ async function sendMessage(text) {
  */
 async function setMode(mode) {
   state.mode = mode;
-  audit.setMode(mode);
+  try { audit.setMode(mode); } catch {}
   ui.updateModeSelector(mode);
+  savePref('mode', mode);
 
-  try {
-    await memory.savePreference('mode', mode);
-  } catch {
-    // Non-critical
-  }
-
-  // If switching to local and engine not ready, try to init
   if (mode === 'local' && engine.getStatus().status !== 'ready') {
-    initEngine();
+    tryInitEngine();
   }
 
   updateSettingsView();
@@ -346,7 +336,7 @@ async function setMode(mode) {
 }
 
 /**
- * Update settings view data
+ * Update settings view
  */
 async function updateSettingsView() {
   ui.updateModeSelector(state.mode);
@@ -359,31 +349,28 @@ async function updateSettingsView() {
   let cloudCalls = 0;
   let convCount = 0;
 
-  try {
-    cloudCalls = await audit.getCloudCallCount();
-    const stats = await memory.getStats();
-    convCount = stats.conversations || 0;
-  } catch {
-    // Use defaults
+  if (memoryReady) {
+    try {
+      cloudCalls = await audit.getCloudCallCount();
+      const stats = await memory.getStats();
+      convCount = stats.conversations || 0;
+    } catch {}
   }
 
   ui.updateTrustDashboard(state.mode, cloudCalls, modelName, convCount);
 }
 
 /**
- * Handle share target data
+ * Handle share target
  */
 async function handleShareTarget(urlParams) {
   if (!urlParams.has('shared')) return null;
-
   try {
-    // Read from IndexedDB (stored by service worker)
     const db = await new Promise((resolve, reject) => {
       const req = indexedDB.open('ai-space-share', 1);
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
-
     const tx = db.transaction('shared', 'readwrite');
     const store = tx.objectStore('shared');
     const all = await new Promise((resolve, reject) => {
@@ -391,26 +378,24 @@ async function handleShareTarget(urlParams) {
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
-
     if (all.length > 0) {
       const latest = all[all.length - 1];
-      // Clear shared content
       const clearTx = db.transaction('shared', 'readwrite');
       clearTx.objectStore('shared').clear();
-
-      const parts = [latest.title, latest.text, latest.url].filter(Boolean);
-      return parts.join('\n\n');
+      return [latest.title, latest.text, latest.url].filter(Boolean).join('\n\n');
     }
-  } catch {
-    // Ignore share target errors
-  }
+  } catch {}
   return null;
 }
 
 /**
- * Export all data
+ * Export data
  */
 async function handleExport() {
+  if (!memoryReady) {
+    ui.showNotification('Memory not available', 'error');
+    return;
+  }
   try {
     const data = await memory.exportAll();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -420,7 +405,7 @@ async function handleExport() {
     a.download = `ai-space-export-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    ui.showNotification('Data exported successfully');
+    ui.showNotification('Data exported');
   } catch (err) {
     ui.showNotification('Export failed: ' + err.message, 'error');
   }
@@ -430,10 +415,9 @@ async function handleExport() {
  * Clear all data
  */
 async function handleClearData() {
-  if (!confirm('This will delete all conversations and settings. Continue?')) return;
-
+  if (!confirm('Delete all conversations and settings?')) return;
   try {
-    await memory.clearAll();
+    if (memoryReady) await memory.clearAll();
     state.messages = [];
     state.conversationId = null;
     ui.clearMessages();
@@ -444,5 +428,4 @@ async function handleClearData() {
   }
 }
 
-// Do NOT auto-init — the landing page CTA or returning-user check triggers initApp()
 export { initApp };
