@@ -945,9 +945,16 @@ async function handleSwitchModel() {
     ui.showNotification('Switched to ' + (engine.getStatus().modelInfo?.name || modelId));
     updateSettingsView();
   } catch (err) {
-    if (hint) hint.textContent = 'Download failed: ' + err.message;
-    if (btn) btn.textContent = 'Download & Switch';
-    ui.showNotification('Failed: ' + err.message, 'error');
+    const msg = err.message || '';
+    const isQuota = msg.includes('quota') || msg.includes('rate') || msg.includes('429') || msg.includes('limit') || msg.includes('exceeded');
+    if (isQuota) {
+      if (hint) hint.textContent = 'Download quota exceeded. Try a smaller model or wait a few minutes and retry.';
+      ui.showNotification('HuggingFace rate limit — try again in a few minutes', 'error');
+    } else {
+      if (hint) hint.textContent = 'Download failed: ' + msg;
+      ui.showNotification('Failed: ' + msg, 'error');
+    }
+    if (btn) btn.textContent = 'Retry Download';
   }
 }
 
