@@ -92,10 +92,17 @@ function initMemoryInBackground() {
 
       // Load cloud config
       const cloudEndpoint = await memory.getPreference('cloud_endpoint');
-      const cloudApiKey = await memory.getPreference('cloud_api_key');
+      const cloudKey = await memory.getPreference('cloud_api_key');
       const cloudModel = await memory.getPreference('cloud_model');
-      if (cloudEndpoint || cloudApiKey) {
-        engine.setCloudConfig(cloudEndpoint || '', cloudApiKey || '', cloudModel || '');
+      if (cloudEndpoint || cloudKey) {
+        engine.setCloudConfig(cloudEndpoint || '', cloudKey || '', cloudModel || '');
+      }
+
+      // Load saved voice preference
+      const savedVoiceIdx = await memory.getPreference('voice_index');
+      if (savedVoiceIdx !== null && savedVoiceIdx !== undefined && savedVoiceIdx >= 0) {
+        voice.preferredVoiceIndex = savedVoiceIdx;
+        voice._cachedVoice = null;
       }
 
       // Restore last conversation
@@ -639,6 +646,23 @@ function wireEventListeners() {
   const clearBtn = document.getElementById('clear-data');
   if (clearBtn) clearBtn.addEventListener('click', handleClearData);
 
+  // Voice picker
+  const voicePicker = document.getElementById('voice-picker');
+  if (voicePicker) {
+    voicePicker.addEventListener('change', () => {
+      const idx = parseInt(voicePicker.value);
+      voice.preferredVoiceIndex = idx;
+      voice._cachedVoice = null; // reset cache
+      savePref('voice_index', idx);
+    });
+  }
+  const voicePreviewBtn = document.getElementById('voice-preview-btn');
+  if (voicePreviewBtn) {
+    voicePreviewBtn.addEventListener('click', () => {
+      voice.speak('Hi, this is how I sound. I can help you with anything you need.');
+    });
+  }
+
   // Local model switch
   const switchModelBtn = document.getElementById('switch-model-btn');
   if (switchModelBtn) switchModelBtn.addEventListener('click', handleSwitchModel);
@@ -824,6 +848,34 @@ async function updateSettingsView() {
   }
 
   ui.updateTrustDashboard(state.mode, cloudCalls, modelName, convCount);
+
+  // Populate voice picker with English voices
+  const voicePickerEl = document.getElementById('voice-picker');
+  if (voicePickerEl) {
+    const populateVoices = async () => {
+      const allVoices = await voice._waitForVoices();
+      const enVoices = allVoices.filter(v => {
+        const lang = (v.lang || '').toLowerCase().replace('_', '-');
+        return lang.startsWith('en-') || lang === 'en';
+      });
+
+      // Keep the auto option, add English voices
+      voicePickerEl.innerHTML = '<option value="-1">Auto (best English voice)</option>';
+      enVoices.forEach(v => {
+        const idx = allVoices.indexOf(v);
+        const opt = document.createElement('option');
+        opt.value = idx;
+        opt.textContent = v.name + ' (' + v.lang + ')';
+        voicePickerEl.appendChild(opt);
+      });
+
+      // Restore saved selection
+      if (voice.preferredVoiceIndex >= 0) {
+        voicePickerEl.value = voice.preferredVoiceIndex;
+      }
+    };
+    populateVoices();
+  }
 
   // Restore saved local model selection
   if (memoryReady) {

@@ -302,11 +302,42 @@ export class Voice {
    * @param {string} text
    * @returns {Promise} Resolves when done speaking
    */
+  /**
+   * Get available English voices (for settings picker)
+   */
+  getEnglishVoices() {
+    if (!this.synthesis) return [];
+    const voices = this.synthesis.getVoices();
+    return voices.filter(v => {
+      const lang = (v.lang || '').toLowerCase().replace('_', '-');
+      return lang.startsWith('en-') || lang === 'en';
+    });
+  }
+
+  /**
+   * Ensure voices are loaded (they load async on some browsers)
+   */
+  _waitForVoices() {
+    return new Promise((resolve) => {
+      const voices = this.synthesis.getVoices();
+      if (voices.length > 0) return resolve(voices);
+      // iOS Safari loads voices async
+      let attempts = 0;
+      const check = setInterval(() => {
+        attempts++;
+        const v = this.synthesis.getVoices();
+        if (v.length > 0 || attempts > 20) {
+          clearInterval(check);
+          resolve(v);
+        }
+      }, 100);
+    });
+  }
+
   speak(text) {
     if (!this.synthesis || !this.ttsEnabled || !text) return Promise.resolve();
 
-    return new Promise((resolve) => {
-      // Cancel any ongoing speech
+    return new Promise(async (resolve) => {
       this.synthesis.cancel();
       this._setState('speaking');
 
@@ -316,48 +347,42 @@ export class Voice {
       utterance.volume = 1.0;
       utterance.lang = 'en-US';
 
-      // STRICTLY English voice — log all available for debugging
-      const voices = this.synthesis.getVoices();
-      console.log('[ai-space] Available voices:', voices.map(v => v.name + ' (' + v.lang + ')').join(', '));
+      // Wait for voices to load (critical on iOS Safari)
+      const voices = await this._waitForVoices();
 
       if (voices.length > 0) {
-        // Filter ONLY English voices by lang code
         const enVoices = voices.filter(v => {
           const lang = (v.lang || '').toLowerCase().replace('_', '-');
           return lang.startsWith('en-') || lang === 'en';
         });
-        console.log('[ai-space] English voices:', enVoices.map(v => v.name + ' (' + v.lang + ')').join(', '));
 
         if (this.preferredVoiceIndex >= 0 && this.preferredVoiceIndex < voices.length) {
           utterance.voice = voices[this.preferredVoiceIndex];
+        } else if (this._cachedVoice) {
+          utterance.voice = this._cachedVoice;
         } else if (enVoices.length > 0) {
-          // Best voices by platform (ordered by quality)
-          const bestNames = [
-            // iOS/macOS Enhanced voices (most natural)
+          // Ranked by quality — best first
+          const ranked = [
             'samantha (enhanced)', 'ava (enhanced)', 'allison (enhanced)',
             'samantha', 'ava', 'allison', 'zoe', 'susan', 'nicky',
             'tom', 'aaron',
-            // Chrome
             'google us english', 'google uk english',
-            // Quality markers
             'enhanced', 'premium', 'natural', 'neural',
-            // iOS standard
             'karen', 'daniel', 'moira', 'kate', 'oliver', 'fiona',
-            // Desktop
             'microsoft zira', 'microsoft david', 'alex'
           ];
 
           let picked = null;
-          for (const pattern of bestNames) {
+          for (const pattern of ranked) {
             picked = enVoices.find(v => v.name.toLowerCase().includes(pattern));
             if (picked) break;
           }
 
           utterance.voice = picked || enVoices[0];
-          console.log('[ai-space] Selected voice:', (utterance.voice?.name || 'default') + ' (' + (utterance.voice?.lang || 'en-US') + ')');
-        } else {
-          console.log('[ai-space] No English voices found, using default');
+          this._cachedVoice = utterance.voice; // cache for next call
         }
+
+        console.log('[ai-space] TTS voice:', utterance.voice?.name || 'browser default', '(' + (utterance.voice?.lang || 'en-US') + ')');
       }
 
       utterance.onend = () => {
