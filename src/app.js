@@ -639,6 +639,11 @@ function wireEventListeners() {
   const clearBtn = document.getElementById('clear-data');
   if (clearBtn) clearBtn.addEventListener('click', handleClearData);
 
+  // Cloud provider dropdown
+  const cloudProvider = document.getElementById('cloud-provider');
+  if (cloudProvider) cloudProvider.addEventListener('change', handleProviderChange);
+  handleProviderChange(); // set initial state
+
   // Cloud config save
   const saveCloudBtn = document.getElementById('save-cloud-config');
   if (saveCloudBtn) saveCloudBtn.addEventListener('click', handleSaveCloudConfig);
@@ -812,13 +817,22 @@ async function updateSettingsView() {
 
   ui.updateTrustDashboard(state.mode, cloudCalls, modelName, convCount);
 
-  // Update cloud config fields
-  const endpointEl = document.getElementById('cloud-endpoint');
+  // Restore saved cloud provider
+  if (memoryReady) {
+    try {
+      const savedProvider = await memory.getPreference('cloud_provider');
+      const providerEl = document.getElementById('cloud-provider');
+      if (savedProvider && providerEl) {
+        providerEl.value = savedProvider;
+        handleProviderChange();
+      }
+    } catch {}
+  }
+
   const apiKeyEl = document.getElementById('cloud-api-key');
-  const modelEl = document.getElementById('cloud-model');
-  if (endpointEl && !endpointEl.value) endpointEl.value = engine.cloudEndpoint || '';
-  if (apiKeyEl && !apiKeyEl.value) apiKeyEl.value = engine.cloudApiKey || '';
-  if (modelEl && !modelEl.value) modelEl.value = engine.cloudModel || 'gpt-3.5-turbo';
+  if (apiKeyEl && !apiKeyEl.value && engine.cloudApiKey) {
+    apiKeyEl.value = engine.cloudApiKey;
+  }
 }
 
 /**
@@ -874,20 +888,80 @@ function handleNewChat() {
 }
 
 /**
+ * Cloud provider presets
+ */
+const CLOUD_PROVIDERS = {
+  openai: {
+    endpoint: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    placeholder: 'sk-...',
+    hint: 'Get your key at platform.openai.com/api-keys'
+  },
+  claude: {
+    endpoint: 'https://api.anthropic.com/v1',
+    model: 'claude-sonnet-4-20250514',
+    placeholder: 'sk-ant-...',
+    hint: 'Get your key at console.anthropic.com/settings/keys'
+  },
+  gemini: {
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    model: 'gemini-2.0-flash',
+    placeholder: 'AIza...',
+    hint: 'Get your key at aistudio.google.com/apikey'
+  },
+  custom: {
+    endpoint: '',
+    model: '',
+    placeholder: 'Your API key',
+    hint: 'Enter your OpenAI-compatible endpoint and model'
+  }
+};
+
+function handleProviderChange() {
+  const select = document.getElementById('cloud-provider');
+  const customFields = document.getElementById('cloud-custom-fields');
+  const hint = document.getElementById('cloud-hint');
+  const apiKeyInput = document.getElementById('cloud-api-key');
+  if (!select) return;
+
+  const provider = select.value;
+  const preset = CLOUD_PROVIDERS[provider];
+
+  if (customFields) customFields.style.display = provider === 'custom' ? 'block' : 'none';
+  if (hint) hint.textContent = preset?.hint || '';
+  if (apiKeyInput) apiKeyInput.placeholder = preset?.placeholder || 'API key';
+}
+
+/**
  * Save cloud configuration
  */
 async function handleSaveCloudConfig() {
-  const endpoint = document.getElementById('cloud-endpoint')?.value?.trim() || '';
+  const provider = document.getElementById('cloud-provider')?.value || 'openai';
   const apiKey = document.getElementById('cloud-api-key')?.value?.trim() || '';
-  const model = document.getElementById('cloud-model')?.value?.trim() || 'gpt-3.5-turbo';
+  const preset = CLOUD_PROVIDERS[provider];
+
+  let endpoint, model;
+  if (provider === 'custom') {
+    endpoint = document.getElementById('cloud-endpoint')?.value?.trim() || '';
+    model = document.getElementById('cloud-model')?.value?.trim() || '';
+  } else {
+    endpoint = preset.endpoint;
+    model = preset.model;
+  }
+
+  if (!apiKey) {
+    ui.showNotification('Enter an API key', 'error');
+    return;
+  }
 
   engine.setCloudConfig(endpoint, apiKey, model);
 
+  savePref('cloud_provider', provider);
   savePref('cloud_endpoint', endpoint);
   savePref('cloud_api_key', apiKey);
   savePref('cloud_model', model);
 
-  ui.showNotification(endpoint ? 'Cloud config saved' : 'Cloud config cleared');
+  ui.showNotification('Saved — ' + provider + ' ready');
 }
 
 /**

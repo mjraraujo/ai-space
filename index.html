@@ -1813,15 +1813,25 @@
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title">Cloud API Configuration</div>
+        <div class="settings-section-title">Cloud API</div>
         <div class="settings-card" style="padding: 16px;">
-          <label class="settings-input-label">API Endpoint</label>
-          <input type="url" class="settings-input" id="cloud-endpoint" placeholder="https://api.openai.com/v1" autocomplete="off">
+          <label class="settings-input-label">Provider</label>
+          <select class="settings-input" id="cloud-provider" style="appearance:auto;-webkit-appearance:auto;">
+            <option value="openai">OpenAI</option>
+            <option value="claude">Anthropic (Claude)</option>
+            <option value="gemini">Google (Gemini)</option>
+            <option value="custom">Custom endpoint</option>
+          </select>
           <label class="settings-input-label">API Key</label>
-          <input type="password" class="settings-input" id="cloud-api-key" placeholder="sk-..." autocomplete="off">
-          <label class="settings-input-label">Model</label>
-          <input type="text" class="settings-input" id="cloud-model" placeholder="gpt-3.5-turbo" value="gpt-3.5-turbo" autocomplete="off">
-          <button class="settings-btn" id="save-cloud-config">Save Config</button>
+          <input type="password" class="settings-input" id="cloud-api-key" placeholder="Paste your API key" autocomplete="off">
+          <div id="cloud-custom-fields" style="display:none;">
+            <label class="settings-input-label">Endpoint URL</label>
+            <input type="url" class="settings-input" id="cloud-endpoint" placeholder="https://api.example.com/v1" autocomplete="off">
+            <label class="settings-input-label">Model name</label>
+            <input type="text" class="settings-input" id="cloud-model" autocomplete="off">
+          </div>
+          <div class="settings-input-hint" id="cloud-hint" style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.4;"></div>
+          <button class="settings-btn" id="save-cloud-config" style="margin-top:12px;">Save</button>
         </div>
       </div>
 
