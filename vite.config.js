@@ -35,6 +35,7 @@ function copyAssetsPlugin() {
 }
 
 export default defineConfig({
+  base: '/ai-space/',
   root: '.',
   build: {
     outDir: 'dist',

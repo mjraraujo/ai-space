@@ -8,9 +8,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="description" content="Privacy-first personal AI environment">
   <title>AI Space</title>
-  <link rel="manifest" href="/manifest.json">
-  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/icons/icon.svg">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/icon.svg">
   <style>
     *, *::before, *::after {
       margin: 0;
@@ -1109,11 +1109,11 @@
 
   <!-- Landing page logic -->
   <script type="module">
-    import { initApp } from '/src/app.js';
+    import { initApp } from './src/app.js';
 
     // Register service worker
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(function() {});
+      navigator.serviceWorker.register('./sw.js').catch(function() {});
     }
 
     // Intersection Observer for scroll animations
