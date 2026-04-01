@@ -86,6 +86,9 @@ function initMemoryInBackground() {
       if (cloudEndpoint || cloudApiKey) {
         engine.setCloudConfig(cloudEndpoint || '', cloudApiKey || '', cloudModel || '');
       }
+
+      // Restore last conversation
+      await restoreLastConversation();
     } catch (err) {
       console.warn('[ai-space] memory init failed:', err);
       memoryReady = false;
@@ -378,12 +381,13 @@ async function sendMessage(text) {
     state.messages.push({ role: 'assistant', content: msg });
   }
 
-  // Save conversation to chat_history
+  // Save conversation persistently
   if (memoryReady) {
     try {
       await memory.saveChatHistory(state.conversationId, state.messages);
-      // Also save to legacy conversations store for compatibility
       await memory.saveConversation(state.conversationId, state.messages);
+      // Remember which conversation is active so we restore on reload
+      await memory.savePreference('last_conversation_id', state.conversationId);
     } catch {}
   }
 
@@ -716,6 +720,35 @@ async function handleCamera() {
     if (err.message !== 'No image') {
       ui.showNotification('Camera error: ' + err.message, 'error');
     }
+  }
+}
+
+/**
+ * Restore last conversation from memory on reload
+ */
+async function restoreLastConversation() {
+  if (!memoryReady) return;
+  try {
+    // Get the last active conversation ID
+    const lastConvId = await memory.getPreference('last_conversation_id');
+    if (!lastConvId) return;
+
+    const conv = await memory.loadConversation(lastConvId);
+    if (conv && conv.messages && conv.messages.length > 0) {
+      state.conversationId = lastConvId;
+      state.messages = conv.messages;
+
+      // Re-render all messages
+      if (ui) {
+        ui.clearMessages();
+        for (const msg of conv.messages) {
+          ui.renderMessage(msg.role, msg.content, false, msg.image || null);
+        }
+      }
+      console.log(`[ai-space] restored conversation: ${conv.messages.length} messages`);
+    }
+  } catch (err) {
+    console.warn('[ai-space] failed to restore conversation:', err);
   }
 }
 
