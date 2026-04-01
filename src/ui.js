@@ -16,6 +16,7 @@ export class UI {
       chatInput: document.getElementById('chat-input'),
       sendBtn: document.getElementById('send-btn'),
       typing: document.getElementById('typing'),
+      chatEmpty: document.getElementById('chat-empty'),
       progressCircle: document.getElementById('progress-circle'),
       progressStatus: document.getElementById('progress-status'),
       toast: document.getElementById('toast'),
@@ -91,6 +92,10 @@ export class UI {
 
     messageDiv.appendChild(bubble);
     this.elements.messages.appendChild(messageDiv);
+
+    if (this.elements.chatEmpty) {
+      this.elements.chatEmpty.classList.add('hidden');
+    }
 
     if (streaming) {
       this.currentStreamEl = bubble;
@@ -253,6 +258,9 @@ export class UI {
     if (this.elements.messages) {
       this.elements.messages.innerHTML = '';
     }
+    if (this.elements.chatEmpty) {
+      this.elements.chatEmpty.classList.remove('hidden');
+    }
   }
 
   /**
@@ -337,6 +345,76 @@ export class UI {
       item.appendChild(title);
       item.appendChild(date);
       list.appendChild(item);
+    }
+  }
+
+  /**
+   * Render chat history list in Settings view
+   * @param {Array} conversations - [{id, title, updatedAt, createdAt}]
+   * @param {function} onLoad - callback(id)
+   * @param {function} onDelete - callback(id)
+   */
+  renderChatHistory(conversations, onLoad, onDelete) {
+    const container = document.getElementById('chat-history-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (!conversations || conversations.length === 0) {
+      container.innerHTML = '<div style="padding:14px 16px;color:var(--fg-dim);font-size:14px;">No conversations yet</div>';
+      return;
+    }
+
+    for (const conv of conversations) {
+      const row = document.createElement('div');
+      row.className = 'settings-row';
+
+      const left = document.createElement('div');
+      left.style.display = 'flex';
+      left.style.flexDirection = 'column';
+      left.style.gap = '2px';
+
+      const title = document.createElement('span');
+      title.className = 'settings-row-label';
+      title.textContent = conv.title || 'Untitled';
+
+      const date = document.createElement('span');
+      date.className = 'settings-row-value';
+      date.style.fontSize = '11px';
+      date.textContent = this._formatDate(conv.updatedAt || conv.createdAt);
+
+      left.appendChild(title);
+      left.appendChild(date);
+
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.gap = '8px';
+
+      const openBtn = document.createElement('button');
+      openBtn.className = 'settings-btn';
+      openBtn.style.padding = '6px 10px';
+      openBtn.textContent = 'Open';
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (onLoad) onLoad(conv.id);
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'settings-btn';
+      delBtn.style.padding = '6px 10px';
+      delBtn.style.color = '#ff6b6b';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (onDelete) onDelete(conv.id);
+      });
+
+      actions.appendChild(openBtn);
+      actions.appendChild(delBtn);
+
+      row.appendChild(left);
+      row.appendChild(actions);
+      container.appendChild(row);
     }
   }
 

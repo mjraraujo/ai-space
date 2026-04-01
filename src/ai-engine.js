@@ -103,6 +103,15 @@ export class AIEngine {
       modelId = Object.keys(MODELS)[0];
     }
 
+    if (!MODELS[modelId]) {
+      this.status = 'error';
+      throw new Error(`Unknown model: ${modelId}`);
+    }
+
+    if (this.status === 'ready' && this.engine && this.modelId === modelId) {
+      return true;
+    }
+
     const hasWebGPU = await this.checkWebGPU();
     if (!hasWebGPU) {
       this.status = 'error';
@@ -230,6 +239,11 @@ export class AIEngine {
       ...messages
     ];
 
+    const endpointHost = this.cloudEndpoint.toLowerCase();
+    if (endpointHost.includes('api.anthropic.com')) {
+      return this._chatAnthropic(messages, systemContent, onToken);
+    }
+
     // Ensure endpoint has /chat/completions
     let url = this.cloudEndpoint;
     if (!url.endsWith('/chat/completions')) {
@@ -295,6 +309,63 @@ export class AIEngine {
       }
 
       return fullResponse;
+    } catch (err) {
+      if (err.message.startsWith('Cloud API error')) {
+        throw err;
+      }
+      throw new Error('Cloud API request failed: ' + err.message);
+    }
+  }
+
+  /**
+   * Claude (Anthropic) inference using native Messages API.
+   */
+  async _chatAnthropic(messages, systemContent, onToken) {
+    let url = this.cloudEndpoint;
+    if (!url.endsWith('/messages')) {
+      if (!url.endsWith('/')) url += '/';
+      url += 'messages';
+    }
+
+    const anthropicMessages = (messages || [])
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+      .map((m) => ({ role: m.role, content: m.content || '' }));
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.cloudApiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: this.cloudModel,
+          max_tokens: 1024,
+          temperature: 0.7,
+          system: systemContent,
+          messages: anthropicMessages
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        throw new Error(`Cloud API error (${response.status}): ${errorText}`);
+      }
+
+      const parsed = await response.json();
+      const text = Array.isArray(parsed?.content)
+        ? parsed.content
+          .filter((item) => item?.type === 'text' && item?.text)
+          .map((item) => item.text)
+          .join('')
+        : '';
+
+      if (onToken && text) {
+        onToken(text, text);
+      }
+
+      return text;
     } catch (err) {
       if (err.message.startsWith('Cloud API error')) {
         throw err;

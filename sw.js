@@ -1,8 +1,19 @@
 const CACHE_VERSION = 'ai-space-v11';
 const MODEL_CACHE = 'ai-space-models-v1';
+const APP_SHELL = [
+  './',
+  './index.html',
+  './manifest.json',
+  './icons/icon.svg'
+];
 
 // Install: activate immediately
 self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_VERSION).then((cache) => cache.addAll(APP_SHELL)).catch(() => {
+      // Ignore precache failures and let runtime cache handle it.
+    })
+  );
   self.skipWaiting();
 });
 
@@ -41,8 +52,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Same-origin: cache-first, always cache on fetch
-  event.respondWith(cacheFirst(event.request, CACHE_VERSION));
+  // Documents: network-first to reduce stale HTML after deployments
+  if (event.request.mode === 'navigate' || event.request.destination === 'document') {
+    event.respondWith(networkFirst(event.request, CACHE_VERSION));
+    return;
+  }
+
+  // Static assets: stale-while-revalidate for fast load + fresh updates
+  event.respondWith(staleWhileRevalidate(event.request, CACHE_VERSION, event));
 });
 
 /**
@@ -58,7 +75,7 @@ async function cacheFirst(request, cacheName) {
   // Network fallback
   try {
     const response = await fetch(request);
-    if (response.ok) {
+    if (response.ok || response.type === 'opaque') {
       cache.put(request, response.clone());
     }
     return response;
@@ -77,6 +94,61 @@ async function cacheFirst(request, cacheName) {
     }
     throw err;
   }
+}
+
+/**
+ * Network-first strategy for navigation/doc requests.
+ */
+async function networkFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  try {
+    const response = await fetch(request);
+    if (response.ok || response.type === 'opaque') {
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+
+    const fallback = await cache.match('./index.html');
+    if (fallback) return fallback;
+    throw new Error('Offline and no cached page available');
+  }
+}
+
+/**
+ * Stale-while-revalidate strategy for same-origin static assets.
+ */
+async function staleWhileRevalidate(request, cacheName, event) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(request);
+
+  const fetchPromise = fetch(request)
+    .then((response) => {
+      if (response.ok || response.type === 'opaque') {
+        cache.put(request, response.clone());
+      }
+      return response;
+    })
+    .catch(() => null);
+
+  if (cached) {
+    if (event && typeof event.waitUntil === 'function') {
+      event.waitUntil(fetchPromise.catch(() => {}));
+    }
+    return cached;
+  }
+
+  const fresh = await fetchPromise;
+  if (fresh) return fresh;
+
+  if (request.destination === 'document') {
+    const fallback = await cache.match('./index.html');
+    if (fallback) return fallback;
+  }
+
+  throw new Error('Request failed and no cache entry exists');
 }
 
 // Handle share target POST

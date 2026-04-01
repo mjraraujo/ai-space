@@ -9,7 +9,7 @@ import { Shortcuts } from './shortcuts.js';
 import { UI } from './ui.js';
 import { Voice } from './voice.js';
 import { Camera } from './camera.js';
-import { deviceAuthFlow, getAuthIssuer } from './codex-auth.js';
+import { deviceAuthFlow, getAuthIssuer, getClientIdOverride, setClientIdOverride, clearClientIdOverride } from './codex-auth.js';
 
 // State
 const state = {
@@ -31,6 +31,7 @@ const camera = new Camera();
 let ui = null;
 let memoryReady = false;
 let pendingImage = null;
+let conversationTurnBusy = false;
 
 /**
  * Initialize the application
@@ -47,6 +48,9 @@ async function initApp() {
 
   // Wire event listeners FIRST so buttons work immediately
   wireEventListeners();
+
+  // Keep chat UX resilient when connectivity changes.
+  setupConnectivityListeners();
 
   // Initialize memory in background — never block the UI
   initMemoryInBackground();
@@ -197,8 +201,8 @@ function goToOnboardingStep(step) {
 function onStepEnter(step) {
   switch (step) {
     case 0:
-      // Auto-advance welcome after 2s
-      onboardingAutoAdvanceTimer = setTimeout(() => goToOnboardingStep(1), 2000);
+      // Softer intro timing with manual continue option.
+      onboardingAutoAdvanceTimer = setTimeout(() => goToOnboardingStep(1), 6000);
       break;
 
     case 2: {
@@ -242,8 +246,7 @@ function onStepEnter(step) {
       if (infoEl) {
         infoEl.textContent = `It looks like you're in ${onboardingData.timezone} and today is ${onboardingData.dateStr}.`;
       }
-      // Auto-advance after 4s if user doesn't tap
-      onboardingAutoAdvanceTimer = setTimeout(() => goToOnboardingStep(4), 4000);
+      // Wait for explicit confirmation to avoid a rushed onboarding flow.
       break;
     }
 
@@ -615,6 +618,10 @@ function wireEventListeners() {
   const enterBtn = document.getElementById('onboarding-enter');
   if (enterBtn) enterBtn.addEventListener('click', () => completeOnboarding());
 
+  // Step 0: Manual continue for first impression control
+  const startNowBtn = document.getElementById('onboarding-start-now');
+  if (startNowBtn) startNowBtn.addEventListener('click', () => goToOnboardingStep(1));
+
   // Mic button (push to talk - single message)
   const micBtn = document.getElementById('mic-btn');
   if (micBtn) micBtn.addEventListener('click', handleMic);
@@ -677,9 +684,47 @@ function wireEventListeners() {
   const connectBtn = document.getElementById('chatgpt-connect-btn');
   if (connectBtn) connectBtn.addEventListener('click', handleChatGPTConnect);
 
+  const saveClientIdBtn = document.getElementById('save-chatgpt-client-id');
+  if (saveClientIdBtn) saveClientIdBtn.addEventListener('click', handleSaveChatGPTClientId);
+
+  const clearClientIdBtn = document.getElementById('clear-chatgpt-client-id');
+  if (clearClientIdBtn) clearClientIdBtn.addEventListener('click', handleClearChatGPTClientId);
+
   // Cloud config save
   const saveCloudBtn = document.getElementById('save-cloud-config');
   if (saveCloudBtn) saveCloudBtn.addEventListener('click', handleSaveCloudConfig);
+}
+
+function setupConnectivityListeners() {
+  const apply = () => renderChatStatusBar();
+
+  window.addEventListener('online', () => {
+    apply();
+    ui?.showNotification('Back online', 'success');
+  });
+  window.addEventListener('offline', () => {
+    apply();
+    ui?.showNotification('You are offline — local mode still works', 'info');
+  });
+
+  apply();
+}
+
+function renderChatStatusBar() {
+  const statusEl = document.getElementById('chat-status-bar');
+  if (!statusEl) return;
+
+  const online = navigator.onLine;
+  statusEl.classList.toggle('offline', !online);
+  statusEl.classList.toggle('online', online);
+
+  if (!online) {
+    statusEl.textContent = 'Offline now: local model still works, cloud calls paused.';
+  } else if (state.mode === 'cloud' || state.mode === 'hybrid') {
+    statusEl.textContent = 'Online: cloud connection available.';
+  } else {
+    statusEl.textContent = 'Online: running local-first on your device.';
+  }
 }
 
 /**
@@ -689,6 +734,58 @@ function handleSend() {
   const text = ui.getInputValue();
   if (!text) return;
   sendMessage(text);
+}
+
+function parseModelSizeToBytes(sizeLabel) {
+  if (!sizeLabel || typeof sizeLabel !== 'string') return 0;
+  const match = sizeLabel.trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(MB|GB)$/i);
+  if (!match) return 0;
+  const value = Number(match[1]);
+  const unit = match[2].toUpperCase();
+  const base = 1024 * 1024;
+  return unit === 'GB' ? value * base * 1024 : value * base;
+}
+
+async function checkModelDownloadCapacity(modelId) {
+  const models = AIEngine.getModels();
+  const model = models[modelId];
+  if (!model) {
+    return { ok: false, reason: 'Unknown model selected.' };
+  }
+
+  const requiredBytes = parseModelSizeToBytes(model.size);
+
+  // Large models like Phi are very likely to fail on low-memory devices.
+  if (modelId.includes('Phi') && typeof navigator.deviceMemory === 'number' && navigator.deviceMemory < 6) {
+    return {
+      ok: false,
+      reason: `This model is very large (${model.size}) and your device reports ${navigator.deviceMemory} GB RAM. Try Llama 1B or Qwen 0.5B.`
+    };
+  }
+
+  if (!navigator.storage?.estimate || requiredBytes <= 0) {
+    return { ok: true, reason: '' };
+  }
+
+  try {
+    const { quota = 0, usage = 0 } = await navigator.storage.estimate();
+    const free = Math.max(0, quota - usage);
+    const safetyMargin = Math.max(250 * 1024 * 1024, requiredBytes * 0.25);
+    const requiredWithMargin = requiredBytes + safetyMargin;
+
+    if (free < requiredWithMargin) {
+      const freeGb = (free / (1024 ** 3)).toFixed(2);
+      const needGb = (requiredWithMargin / (1024 ** 3)).toFixed(2);
+      return {
+        ok: false,
+        reason: `Not enough browser storage for this model. Free: ${freeGb} GB, needed: ~${needGb} GB (includes temp/cache overhead).`
+      };
+    }
+  } catch {
+    // Ignore estimation errors and continue.
+  }
+
+  return { ok: true, reason: '' };
 }
 
 /**
@@ -722,6 +819,16 @@ async function sendMessage(text) {
   const engineStatus = engine.getStatus();
   const canLocal = engineStatus.status === 'ready' && state.mode !== 'cloud';
   const canCloud = (state.mode === 'cloud' || state.mode === 'hybrid') && engine.cloudConfigured;
+
+  if (!navigator.onLine && !canLocal && (state.mode === 'cloud' || state.mode === 'hybrid')) {
+    const msg = 'You are offline and cloud mode is selected. Switch to local mode or wait until connection is restored.';
+    ui.renderMessage('assistant', msg);
+    state.messages.push({ role: 'assistant', content: msg });
+    state.isGenerating = false;
+    const inputEl = document.getElementById('chat-input');
+    if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
+    return;
+  }
 
   if (canLocal) {
     // Local inference
@@ -806,6 +913,10 @@ async function sendMessage(text) {
  * Set operating mode
  */
 async function setMode(mode) {
+  if (!navigator.onLine && (mode === 'cloud' || mode === 'hybrid')) {
+    ui.showNotification('You are offline. Cloud responses will fail until connection returns.', 'error');
+  }
+
   state.mode = mode;
   engine.mode = mode;
   try { audit.setMode(mode); } catch {}
@@ -817,6 +928,7 @@ async function setMode(mode) {
   }
 
   updateSettingsView();
+  renderChatStatusBar();
   ui.showNotification(`Switched to ${mode} mode`);
 }
 
@@ -903,6 +1015,46 @@ async function updateSettingsView() {
   if (apiKeyEl && !apiKeyEl.value && engine.cloudApiKey) {
     apiKeyEl.value = engine.cloudApiKey;
   }
+
+  const clientIdInput = document.getElementById('chatgpt-client-id');
+  if (clientIdInput) {
+    clientIdInput.value = getClientIdOverride();
+  }
+}
+
+function handleSaveChatGPTClientId() {
+  const input = document.getElementById('chatgpt-client-id');
+  const statusEl = document.getElementById('oauth-status');
+  const connectBtn = document.getElementById('chatgpt-connect-btn');
+  const value = input?.value?.trim() || '';
+
+  if (!value) {
+    ui.showNotification('Enter a client ID (example: app_xxx)', 'error');
+    return;
+  }
+
+  setClientIdOverride(value);
+  if (statusEl) statusEl.textContent = 'Client ID override saved. You can retry Connect ChatGPT.';
+  if (connectBtn) {
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'Connect ChatGPT';
+  }
+  ui.showNotification('ChatGPT client ID saved', 'success');
+}
+
+function handleClearChatGPTClientId() {
+  const input = document.getElementById('chatgpt-client-id');
+  const statusEl = document.getElementById('oauth-status');
+  const connectBtn = document.getElementById('chatgpt-connect-btn');
+
+  clearClientIdOverride();
+  if (input) input.value = '';
+  if (statusEl) statusEl.textContent = 'Using default built-in client ID.';
+  if (connectBtn) {
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'Connect ChatGPT';
+  }
+  ui.showNotification('Reverted to default client ID', 'success');
 }
 
 /**
@@ -979,6 +1131,14 @@ async function handleSwitchModel() {
     return;
   }
 
+  const capacity = await checkModelDownloadCapacity(modelId);
+  if (!capacity.ok) {
+    if (hint) hint.textContent = capacity.reason;
+    ui.showNotification(capacity.reason, 'error');
+    if (btn) btn.textContent = 'Download & Switch';
+    return;
+  }
+
   if (btn) btn.textContent = 'Downloading...';
   if (hint) hint.textContent = 'Starting download...';
 
@@ -999,10 +1159,15 @@ async function handleSwitchModel() {
     updateSettingsView();
   } catch (err) {
     const msg = err.message || '';
-    const isQuota = msg.includes('quota') || msg.includes('rate') || msg.includes('429') || msg.includes('limit') || msg.includes('exceeded');
+    const lower = msg.toLowerCase();
+    const isQuota = lower.includes('quota') || lower.includes('rate') || lower.includes('429') || lower.includes('limit') || lower.includes('exceeded');
+    const isStorage = lower.includes('storage') || lower.includes('space') || lower.includes('disk') || lower.includes('quotaexceedederror');
     if (isQuota) {
       if (hint) hint.textContent = 'Download quota exceeded. Try a smaller model or wait a few minutes and retry.';
       ui.showNotification('HuggingFace rate limit — try again in a few minutes', 'error');
+    } else if (isStorage) {
+      if (hint) hint.textContent = 'Download failed due to storage limits. Free browser storage or pick a smaller model.';
+      ui.showNotification('Not enough storage for this model', 'error');
     } else {
       if (hint) hint.textContent = 'Download failed: ' + msg;
       ui.showNotification('Failed: ' + msg, 'error');
@@ -1019,7 +1184,7 @@ const CLOUD_PROVIDERS = {
     endpoint: 'https://chatgpt.com/backend-api/codex',
     model: 'o4-mini',
     placeholder: '',
-    hint: 'Use your ChatGPT Plus/Pro subscription. Click Connect below.',
+    hint: 'Optional cloud. Local mode stays primary. Connect ChatGPT Plus/Pro below if available.',
     oauth: true
   },
   openai: {
@@ -1112,6 +1277,7 @@ async function handleChatGPTConnect() {
   const connectBtn = document.getElementById('chatgpt-connect-btn');
 
   if (connectBtn) connectBtn.disabled = true;
+  if (statusEl) statusEl.textContent = 'Opening secure device login...';
 
   try {
     const tokens = await deviceAuthFlow(
@@ -1140,7 +1306,6 @@ async function handleChatGPTConnect() {
     savePref('cloud_provider', 'chatgpt');
     savePref('cloud_endpoint', CLOUD_PROVIDERS.chatgpt.endpoint);
     savePref('cloud_api_key', tokens.access_token);
-    savePref('cloud_refresh_token', tokens.refresh_token);
     savePref('cloud_model', CLOUD_PROVIDERS.chatgpt.model);
 
     if (statusEl) statusEl.textContent = 'Connected to ChatGPT';
@@ -1148,9 +1313,34 @@ async function handleChatGPTConnect() {
     if (connectBtn) { connectBtn.disabled = false; connectBtn.textContent = 'Connected'; }
     ui.showNotification('ChatGPT Plus connected');
   } catch (err) {
-    if (statusEl) statusEl.textContent = err.message;
+    const message = err?.message || 'Unknown auth error';
+    const lower = message.toLowerCase();
+    const invalidClient = lower.includes('invalid client') || lower.includes('invalid_client');
+
+    if (statusEl) {
+      if (invalidClient) {
+        statusEl.textContent = 'ChatGPT sign-in failed with invalid client. Set a valid Client ID in Advanced, then retry. Local mode still works and cloud remains optional.';
+      } else {
+        statusEl.textContent = message + ' (issuer: ' + getAuthIssuer() + ')';
+      }
+    }
     if (connectBtn) connectBtn.disabled = false;
+    if (connectBtn) connectBtn.textContent = 'Connect ChatGPT';
     if (codeDisplay) codeDisplay.style.display = 'none';
+    if (invalidClient) {
+      if (connectBtn) connectBtn.textContent = 'Retry Connect';
+      const hint = document.getElementById('cloud-hint');
+      if (hint) {
+        hint.textContent = 'ChatGPT failed with invalid client. Keep local-first mode, or set a valid Advanced Client ID and retry.';
+      }
+      ui.showNotification('ChatGPT sign-in unavailable now. Using local-first mode.', 'error');
+      state.mode = 'local';
+      engine.mode = 'local';
+      savePref('mode', 'local');
+      renderChatStatusBar();
+    } else {
+      ui.showNotification('ChatGPT connection failed', 'error');
+    }
   }
 }
 
@@ -1264,6 +1454,8 @@ async function handleMic() {
       input.value = result.text;
       ui.autoResizeInput();
       ui.setSendEnabled(true);
+    } else if (result.audio) {
+      ui.showNotification('This browser captured audio but could not transcribe it. For live voice text, use a browser with SpeechRecognition.', 'error');
     }
     return;
   }
@@ -1297,8 +1489,14 @@ async function handleConversation() {
     return;
   }
 
+  if (!voice.hasSpeechRecognition) {
+    ui.showNotification('Conversation mode requires SpeechRecognition support (Chrome/Edge recommended).', 'error');
+    return;
+  }
+
   if (voice.conversationMode) {
     voice.stopConversation();
+    conversationTurnBusy = false;
     btn.classList.remove('active');
     input.value = '';
     input.placeholder = 'Message...';
@@ -1312,13 +1510,31 @@ async function handleConversation() {
     };
 
     voice.onSilenceDetected = async (text) => {
-      if (!text.trim()) return;
-      input.value = '';
-      await sendMessage(text);
+      if (conversationTurnBusy || state.isGenerating) return;
 
-      const lastMsg = state.messages[state.messages.length - 1];
-      if (lastMsg && lastMsg.role === 'assistant' && voice.ttsEnabled) {
-        await voice.speak(lastMsg.content);
+      conversationTurnBusy = true;
+      try {
+        let finalText = (text || '').trim();
+
+        // Stop capture before sending to avoid overlap/echo in conversation mode.
+        if (voice.isRecording) {
+          const stopped = await voice.stopRecording();
+          finalText = (stopped?.text || finalText || '').trim();
+        }
+
+        if (!finalText) {
+          return;
+        }
+
+        input.value = '';
+        await sendMessage(finalText);
+
+        const lastMsg = state.messages[state.messages.length - 1];
+        if (lastMsg && lastMsg.role === 'assistant' && voice.ttsEnabled) {
+          await voice.speak(lastMsg.content);
+        }
+      } finally {
+        conversationTurnBusy = false;
       }
 
       if (voice.conversationMode) {

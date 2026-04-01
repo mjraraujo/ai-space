@@ -334,21 +334,49 @@ export class Voice {
     });
   }
 
+  _chunkTextForSpeech(text, maxLen = 220) {
+    const clean = (text || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return [];
+
+    const sentences = clean.match(/[^.!?]+[.!?]?/g) || [clean];
+    const chunks = [];
+    let current = '';
+
+    for (const sentenceRaw of sentences) {
+      const sentence = sentenceRaw.trim();
+      if (!sentence) continue;
+
+      if (!current) {
+        current = sentence;
+        continue;
+      }
+
+      if ((current + ' ' + sentence).length <= maxLen) {
+        current += ' ' + sentence;
+      } else {
+        chunks.push(current);
+        current = sentence;
+      }
+    }
+
+    if (current) chunks.push(current);
+    return chunks;
+  }
+
   speak(text) {
     if (!this.synthesis || !this.ttsEnabled || !text) return Promise.resolve();
 
     return new Promise(async (resolve) => {
       this.synthesis.cancel();
+      if (this._iosResumeInterval) {
+        clearInterval(this._iosResumeInterval);
+        this._iosResumeInterval = null;
+      }
       this._setState('speaking');
-
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
-      utterance.volume = 1.0;
-      utterance.lang = 'en-US';
 
       // Wait for voices to load (critical on iOS Safari)
       const voices = await this._waitForVoices();
+      let selectedVoice = null;
 
       if (voices.length > 0) {
         const enVoices = voices.filter(v => {
@@ -357,9 +385,9 @@ export class Voice {
         });
 
         if (this.preferredVoiceIndex >= 0 && this.preferredVoiceIndex < voices.length) {
-          utterance.voice = voices[this.preferredVoiceIndex];
+          selectedVoice = voices[this.preferredVoiceIndex];
         } else if (this._cachedVoice) {
-          utterance.voice = this._cachedVoice;
+          selectedVoice = this._cachedVoice;
         } else if (enVoices.length > 0) {
           // Ranked by quality — best first
           const ranked = [
@@ -378,30 +406,54 @@ export class Voice {
             if (picked) break;
           }
 
-          utterance.voice = picked || enVoices[0];
-          this._cachedVoice = utterance.voice; // cache for next call
+          selectedVoice = picked || enVoices[0];
+          this._cachedVoice = selectedVoice; // cache for next call
         }
 
-        console.log('[ai-space] TTS voice:', utterance.voice?.name || 'browser default', '(' + (utterance.voice?.lang || 'en-US') + ')');
+        console.log('[ai-space] TTS voice:', selectedVoice?.name || 'browser default', '(' + (selectedVoice?.lang || 'en-US') + ')');
       }
 
-      utterance.onend = () => {
+      const chunks = this._chunkTextForSpeech(text);
+      if (chunks.length === 0) {
         this._setState('idle');
         resolve();
-      };
+        return;
+      }
 
-      utterance.onerror = (e) => {
-        // 'interrupted' and 'canceled' are normal when user cancels
-        if (e.error !== 'interrupted' && e.error !== 'canceled') {
-          console.warn('TTS error:', e.error);
+      let idx = 0;
+      const speakNext = () => {
+        if (idx >= chunks.length) {
+          this._setState('idle');
+          resolve();
+          return;
         }
-        this._setState('idle');
-        resolve();
+
+        const utterance = new SpeechSynthesisUtterance(chunks[idx]);
+        utterance.lang = selectedVoice?.lang || this.preferredLang || 'en-US';
+        utterance.voice = selectedVoice || null;
+        utterance.rate = 0.94;
+        utterance.pitch = 1.02;
+        utterance.volume = 1.0;
+
+        utterance.onend = () => {
+          idx += 1;
+          speakNext();
+        };
+
+        utterance.onerror = (e) => {
+          if (e.error !== 'interrupted' && e.error !== 'canceled') {
+            console.warn('TTS error:', e.error);
+          }
+          this._setState('idle');
+          resolve();
+        };
+
+        this.synthesis.speak(utterance);
       };
 
-      // iOS Safari requires speech to happen in response to user interaction
-      // but since we're calling this after user-initiated flow, it should work
-      this.synthesis.speak(utterance);
+      // iOS Safari requires speech to happen in response to user interaction.
+      // This call path originates from user actions, so it is generally allowed.
+      speakNext();
 
       // iOS Safari bug: speechSynthesis can pause/hang. Resume workaround.
       if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
@@ -410,6 +462,7 @@ export class Voice {
             // keep alive
           } else if (!this.synthesis.speaking) {
             clearInterval(this._iosResumeInterval);
+            this._iosResumeInterval = null;
           }
         }, 5000);
       }
