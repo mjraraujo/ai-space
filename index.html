@@ -1817,12 +1817,19 @@
         <div class="settings-card" style="padding: 16px;">
           <label class="settings-input-label">Provider</label>
           <select class="settings-input" id="cloud-provider" style="appearance:auto;-webkit-appearance:auto;">
-            <option value="openai">OpenAI</option>
+            <option value="chatgpt">ChatGPT Plus/Pro (free with subscription)</option>
+            <option value="openai">OpenAI API</option>
             <option value="claude">Anthropic (Claude)</option>
             <option value="gemini">Google (Gemini)</option>
             <option value="custom">Custom endpoint</option>
           </select>
-          <label class="settings-input-label">API Key</label>
+          <div id="cloud-oauth-section" style="display:none;margin-top:12px;">
+            <p style="font-size:13px;color:var(--fg-muted);margin-bottom:12px;line-height:1.5;">Sign in with your OpenAI account. Uses your existing ChatGPT Plus or Pro subscription — no API key needed.</p>
+            <button class="settings-btn" id="chatgpt-connect-btn" style="width:100%;">Connect ChatGPT</button>
+            <div id="oauth-code" style="display:none;font-size:28px;font-weight:700;letter-spacing:0.15em;text-align:center;padding:16px;margin-top:12px;background:var(--surface);border-radius:12px;border:1px solid var(--border);font-family:monospace;"></div>
+            <div id="oauth-status" style="font-size:13px;color:var(--fg-dim);text-align:center;margin-top:8px;"></div>
+          </div>
+          <label class="settings-input-label" id="cloud-api-key-label">API Key</label>
           <input type="password" class="settings-input" id="cloud-api-key" placeholder="Paste your API key" autocomplete="off">
           <div id="cloud-custom-fields" style="display:none;">
             <label class="settings-input-label">Endpoint URL</label>
