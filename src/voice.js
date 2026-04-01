@@ -316,37 +316,48 @@ export class Voice {
       utterance.volume = 1.0;
       utterance.lang = 'en-US';
 
-      // STRICTLY pick English voice — never Portuguese or other languages
+      // STRICTLY English voice — log all available for debugging
       const voices = this.synthesis.getVoices();
+      console.log('[ai-space] Available voices:', voices.map(v => v.name + ' (' + v.lang + ')').join(', '));
+
       if (voices.length > 0) {
-        // Filter ONLY English voices
-        const enVoices = voices.filter(v =>
-          v.lang === 'en-US' || v.lang === 'en-GB' || v.lang === 'en_US' || v.lang === 'en_GB' ||
-          v.lang === 'en-AU' || v.lang.startsWith('en-') || v.lang.startsWith('en_')
-        );
+        // Filter ONLY English voices by lang code
+        const enVoices = voices.filter(v => {
+          const lang = (v.lang || '').toLowerCase().replace('_', '-');
+          return lang.startsWith('en-') || lang === 'en';
+        });
+        console.log('[ai-space] English voices:', enVoices.map(v => v.name + ' (' + v.lang + ')').join(', '));
 
         if (this.preferredVoiceIndex >= 0 && this.preferredVoiceIndex < voices.length) {
           utterance.voice = voices[this.preferredVoiceIndex];
         } else if (enVoices.length > 0) {
-          // Priority order for natural-sounding voices
-          const namePatterns = [
-            'samantha', 'ava', 'allison', 'susan', 'zoe',   // iOS premium female
-            'tom', 'aaron', 'nicky',                          // iOS premium male
-            'google us english', 'google uk english male',     // Chrome
-            'enhanced', 'premium', 'natural',                  // quality markers
-            'karen', 'daniel', 'moira', 'kate', 'oliver',     // iOS standard
-            'microsoft', 'alex'                                // desktop
+          // Best voices by platform (ordered by quality)
+          const bestNames = [
+            // iOS/macOS Enhanced voices (most natural)
+            'samantha (enhanced)', 'ava (enhanced)', 'allison (enhanced)',
+            'samantha', 'ava', 'allison', 'zoe', 'susan', 'nicky',
+            'tom', 'aaron',
+            // Chrome
+            'google us english', 'google uk english',
+            // Quality markers
+            'enhanced', 'premium', 'natural', 'neural',
+            // iOS standard
+            'karen', 'daniel', 'moira', 'kate', 'oliver', 'fiona',
+            // Desktop
+            'microsoft zira', 'microsoft david', 'alex'
           ];
 
           let picked = null;
-          for (const pattern of namePatterns) {
+          for (const pattern of bestNames) {
             picked = enVoices.find(v => v.name.toLowerCase().includes(pattern));
             if (picked) break;
           }
 
           utterance.voice = picked || enVoices[0];
+          console.log('[ai-space] Selected voice:', (utterance.voice?.name || 'default') + ' (' + (utterance.voice?.lang || 'en-US') + ')');
+        } else {
+          console.log('[ai-space] No English voices found, using default');
         }
-        // If no English voices found at all, don't set voice — let browser use default with en-US lang
       }
 
       utterance.onend = () => {

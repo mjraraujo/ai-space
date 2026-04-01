@@ -15,12 +15,12 @@ const MODELS = {
   'SmolLM2-360M-Instruct-q4f16_1-MLC': {
     name: 'SmolLM2 360M',
     size: '200 MB',
-    description: 'Ultra-fast. Basic tasks, quick replies.'
+    description: 'Ultra-fast. Tiny download. Start here.'
   },
   'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': {
     name: 'Qwen 2.5 0.5B',
     size: '350 MB',
-    description: 'Recommended. Good balance of speed and quality.'
+    description: 'Good balance. Recommended for most users.'
   },
   'Llama-3.2-1B-Instruct-q4f16_1-MLC': {
     name: 'Llama 3.2 1B',
