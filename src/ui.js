@@ -51,9 +51,16 @@ export class UI {
    * @param {boolean} streaming - If true, mark as streaming target
    * @returns {HTMLElement} The message element
    */
-  renderMessage(role, content, streaming = false) {
+  renderMessage(role, content, streaming = false, imageDataUrl = null) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message message-${role}`;
+
+    if (imageDataUrl) {
+      const img = document.createElement('img');
+      img.src = imageDataUrl;
+      img.className = 'message-image';
+      messageDiv.appendChild(img);
+    }
 
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';

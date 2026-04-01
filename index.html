@@ -753,6 +753,79 @@
       height: 16px;
     }
 
+    /* Input action buttons (camera, voice) */
+    .chat-input-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: none;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: var(--fg-muted);
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
+    }
+
+    .chat-input-btn:hover {
+      color: var(--fg);
+      border-color: var(--fg-dim);
+    }
+
+    .chat-input-btn.active {
+      color: #ff4444;
+      border-color: #ff4444;
+      background: rgba(255,68,68,0.1);
+      animation: voicePulse 1.5s ease infinite;
+    }
+
+    @keyframes voicePulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,68,68,0.2); }
+      50% { box-shadow: 0 0 0 8px rgba(255,68,68,0); }
+    }
+
+    /* Image preview */
+    .chat-image-preview {
+      padding: 8px 16px;
+      border-top: 1px solid var(--border);
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .chat-image-preview img {
+      max-height: 120px;
+      border-radius: 12px;
+      object-fit: cover;
+    }
+
+    .chat-image-remove {
+      position: absolute;
+      top: 4px;
+      right: 12px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Image in messages */
+    .message-image {
+      max-width: 100%;
+      max-height: 200px;
+      border-radius: 12px;
+      margin-bottom: 8px;
+      object-fit: cover;
+    }
+
     /* Settings */
     #settings {
       padding-top: var(--safe-top);
@@ -1121,8 +1194,19 @@
         <div class="typing-dot"></div>
       </div>
     </div>
+    <!-- Image preview -->
+    <div class="chat-image-preview" id="image-preview" style="display:none;">
+      <img id="preview-img" alt="">
+      <button class="chat-image-remove" id="remove-image">✕</button>
+    </div>
     <div class="chat-input-area">
+      <button class="chat-input-btn" id="camera-btn" title="Photo">
+        <svg viewBox="0 0 24 24" fill="none" width="20" height="20"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
       <textarea class="chat-input" id="chat-input" rows="1" placeholder="Message..." autocomplete="off"></textarea>
+      <button class="chat-input-btn" id="voice-btn" title="Voice">
+        <svg viewBox="0 0 24 24" fill="none" width="20" height="20"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <button class="chat-send" id="send-btn" disabled>
         <svg viewBox="0 0 24 24" fill="none">
           <path d="M5 12h14M12 5l7 7-7 7" stroke="#0a0a0a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>

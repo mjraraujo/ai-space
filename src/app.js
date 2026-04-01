@@ -7,6 +7,8 @@ import { Memory } from './memory.js';
 import { Audit } from './audit.js';
 import { Shortcuts } from './shortcuts.js';
 import { UI } from './ui.js';
+import { Voice } from './voice.js';
+import { Camera } from './camera.js';
 
 // State
 const state = {
@@ -23,8 +25,11 @@ const engine = new AIEngine();
 const memory = new Memory();
 const audit = new Audit();
 const shortcuts = new Shortcuts();
+const voice = new Voice();
+const camera = new Camera();
 let ui = null;
 let memoryReady = false;
+let pendingImage = null;
 
 /**
  * Initialize the application
@@ -219,6 +224,21 @@ function wireEventListeners() {
     transition('chat');
   });
 
+  // Voice button
+  const voiceBtn = document.getElementById('voice-btn');
+  if (voiceBtn) voiceBtn.addEventListener('click', handleVoice);
+
+  // Camera button
+  const cameraBtn = document.getElementById('camera-btn');
+  if (cameraBtn) cameraBtn.addEventListener('click', handleCamera);
+
+  // Remove image preview
+  const removeImg = document.getElementById('remove-image');
+  if (removeImg) removeImg.addEventListener('click', () => {
+    pendingImage = null;
+    document.getElementById('image-preview').style.display = 'none';
+  });
+
   // Data management
   const exportBtn = document.getElementById('export-data');
   if (exportBtn) exportBtn.addEventListener('click', handleExport);
@@ -246,8 +266,15 @@ async function sendMessage(text) {
     state.conversationId = `conv_${Date.now()}`;
   }
 
-  state.messages.push({ role: 'user', content: text });
-  ui.renderMessage('user', text);
+  // Handle attached image
+  const image = pendingImage;
+  if (image) {
+    pendingImage = null;
+    document.getElementById('image-preview').style.display = 'none';
+  }
+
+  state.messages.push({ role: 'user', content: text, image: image || undefined });
+  ui.renderMessage('user', text, false, image);
   ui.setSendEnabled(false);
   state.isGenerating = true;
 
@@ -409,6 +436,60 @@ async function handleClearData() {
     updateSettingsView();
   } catch (err) {
     ui.showNotification('Clear failed: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Voice input
+ */
+async function handleVoice() {
+  const btn = document.getElementById('voice-btn');
+  if (!voice.supported) {
+    ui.showNotification('Voice not supported in this browser', 'error');
+    return;
+  }
+
+  if (voice.isListening) {
+    voice.stop();
+    btn.classList.remove('active');
+    return;
+  }
+
+  btn.classList.add('active');
+  try {
+    const text = await voice.listen();
+    btn.classList.remove('active');
+    if (text) {
+      const input = document.getElementById('chat-input');
+      input.value = (input.value ? input.value + ' ' : '') + text;
+      ui.autoResizeInput();
+      ui.setSendEnabled(true);
+    }
+  } catch (err) {
+    btn.classList.remove('active');
+    ui.showNotification('Voice error: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Camera / image input
+ */
+async function handleCamera() {
+  try {
+    const img = await camera.capture();
+    const resized = await camera.resize(img.dataUrl);
+    pendingImage = resized;
+
+    const preview = document.getElementById('image-preview');
+    const previewImg = document.getElementById('preview-img');
+    previewImg.src = resized;
+    preview.style.display = 'block';
+
+    ui.setSendEnabled(true);
+  } catch (err) {
+    if (err.message !== 'No image') {
+      ui.showNotification('Camera error: ' + err.message, 'error');
+    }
   }
 }
 
