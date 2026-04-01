@@ -521,8 +521,8 @@
 
     /* Onboarding / Download Progress */
     #onboarding {
-      align-items: center;
-      justify-content: center;
+      align-items: stretch;
+      justify-content: stretch;
       padding: 0;
       padding-top: var(--safe-top);
       position: relative;
@@ -1115,9 +1115,6 @@
 
     .onboarding-step {
       display: none;
-      position: absolute;
-      inset: 0;
-      z-index: 1;
     }
 
     .onboarding-step.active {
@@ -1126,9 +1123,12 @@
       align-items: center;
       justify-content: center;
       text-align: center;
-      min-height: 100%;
+      flex: 1;
+      width: 100%;
       padding: 24px;
       color: #ffffff;
+      position: relative;
+      z-index: 2;
     }
 
     .onboarding-step-title {
