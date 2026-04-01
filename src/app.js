@@ -121,13 +121,11 @@ async function startOnboarding() {
     ui.updateProgress(5, 'WebGPU available. Ready to download model.');
     setTimeout(() => initEngine(), 1500);
   } else {
-    ui.updateProgress(0, 'WebGPU not available. Using cloud mode.');
+    // No WebGPU — skip straight to chat in cloud mode, no waiting
     state.mode = 'cloud';
-    await memory.savePreference('mode', 'cloud');
-    setTimeout(() => {
-      markVisited();
-      transition('chat');
-    }, 2000);
+    try { await memory.savePreference('mode', 'cloud'); } catch {}
+    markVisited();
+    transition('chat');
   }
 }
 
@@ -446,11 +444,5 @@ async function handleClearData() {
   }
 }
 
-// Initialize when DOM is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initApp);
-} else {
-  initApp();
-}
-
+// Do NOT auto-init — the landing page CTA or returning-user check triggers initApp()
 export { initApp };

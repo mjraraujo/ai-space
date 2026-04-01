@@ -1108,67 +1108,65 @@
   <div class="toast" id="toast"></div>
 
   <!-- Landing page logic -->
-  <script>
-    (function() {
-      // Intersection Observer for scroll animations
-      const observer = new IntersectionObserver(function(entries) {
-        entries.forEach(function(entry) {
-          if (entry.isIntersecting) {
-            entry.target.classList.add('in-view');
-          }
-        });
-      }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
+  <script type="module">
+    import { initApp } from '/src/app.js';
 
-      document.querySelectorAll('.landing-section:not(.in-view)').forEach(function(el) {
-        observer.observe(el);
-      });
-
-      // Enter app button
-      var enterBtn = document.getElementById('enter-app');
-      if (enterBtn) {
-        enterBtn.addEventListener('click', function() {
-          enterApp();
-        });
-      }
-
-      function enterApp() {
-        // Hide all landing sections
-        document.querySelectorAll('.landing-section').forEach(function(el) {
-          el.classList.add('landing-hidden');
-        });
-
-        // Switch body mode
-        document.body.classList.remove('landing-mode');
-        document.body.classList.add('app-mode');
-        document.documentElement.style.height = '100%';
-        document.documentElement.style.overflow = 'hidden';
-
-        // Show onboarding/download view
-        var onboarding = document.getElementById('onboarding');
-        onboarding.classList.add('active');
-        setTimeout(function() {
-          onboarding.classList.add('visible');
-        }, 50);
-      }
-
-      // Check if already initialized (returning user)
-      if (localStorage.getItem('ai-space-entered')) {
-        enterApp();
-      }
-
-      // Mark as entered on CTA click
-      if (enterBtn) {
-        enterBtn.addEventListener('click', function() {
-          localStorage.setItem('ai-space-entered', 'true');
-        });
-      }
-    })();
-  </script>
-
-  <script type="module" src="/src/app.js"></script>
-  <script>
+    // Register service worker
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(function() {});
+    }
+
+    // Intersection Observer for scroll animations
+    const observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in-view');
+        }
+      });
+    }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
+
+    document.querySelectorAll('.landing-section:not(.in-view)').forEach(function(el) {
+      observer.observe(el);
+    });
+
+    let appInitialized = false;
+
+    function enterApp() {
+      // Hide all landing sections
+      document.querySelectorAll('.landing-section').forEach(function(el) {
+        el.classList.add('landing-hidden');
+      });
+
+      // Switch body mode
+      document.body.classList.remove('landing-mode');
+      document.body.classList.add('app-mode');
+      document.documentElement.style.height = '100%';
+      document.documentElement.style.overflow = 'hidden';
+
+      // Show onboarding/download view
+      var onboarding = document.getElementById('onboarding');
+      onboarding.classList.add('active');
+      setTimeout(function() {
+        onboarding.classList.add('visible');
+      }, 50);
+
+      // Init the app (only once)
+      if (!appInitialized) {
+        appInitialized = true;
+        localStorage.setItem('ai-space-entered', 'true');
+        initApp();
+      }
+    }
+
+    // Enter app button
+    var enterBtn = document.getElementById('enter-app');
+    if (enterBtn) {
+      enterBtn.addEventListener('click', enterApp);
+    }
+
+    // Returning user — skip landing
+    if (localStorage.getItem('ai-space-entered')) {
+      enterApp();
     }
   </script>
 </body>
