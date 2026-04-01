@@ -607,19 +607,29 @@ function wireEventListeners() {
   const enterBtn = document.getElementById('onboarding-enter');
   if (enterBtn) enterBtn.addEventListener('click', () => completeOnboarding());
 
-  // Voice button
-  const voiceBtn = document.getElementById('voice-btn');
-  if (voiceBtn) voiceBtn.addEventListener('click', handleVoice);
+  // Mic button (push to talk - single message)
+  const micBtn = document.getElementById('mic-btn');
+  if (micBtn) micBtn.addEventListener('click', handleMic);
 
-  // Camera button
-  const cameraBtn = document.getElementById('camera-btn');
-  if (cameraBtn) cameraBtn.addEventListener('click', handleCamera);
+  // Conversation mode button
+  const convBtn = document.getElementById('conv-btn');
+  if (convBtn) convBtn.addEventListener('click', handleConversation);
 
-  // Remove image preview
-  const removeImg = document.getElementById('remove-image');
-  if (removeImg) removeImg.addEventListener('click', () => {
-    pendingImage = null;
-    document.getElementById('image-preview').style.display = 'none';
+  // Sidebar
+  const menuBtn = document.getElementById('menu-btn');
+  const sidebar = document.getElementById('chat-sidebar');
+  const sidebarOverlay = document.getElementById('sidebar-overlay');
+  if (menuBtn) menuBtn.addEventListener('click', () => toggleSidebar(true));
+  if (sidebarOverlay) sidebarOverlay.addEventListener('click', () => toggleSidebar(false));
+
+  // New chat button
+  const newChatBtn = document.getElementById('new-chat-btn');
+  if (newChatBtn) newChatBtn.addEventListener('click', () => {
+    state.messages = [];
+    state.conversationId = 'conv_' + Date.now();
+    ui.clearMessages();
+    toggleSidebar(false);
+    savePref('last_conversation_id', state.conversationId);
   });
 
   // Data management
@@ -628,10 +638,6 @@ function wireEventListeners() {
 
   const clearBtn = document.getElementById('clear-data');
   if (clearBtn) clearBtn.addEventListener('click', handleClearData);
-
-  // New conversation button
-  const newChatBtn = document.getElementById('new-chat-btn');
-  if (newChatBtn) newChatBtn.addEventListener('click', handleNewChat);
 
   // Cloud config save
   const saveCloudBtn = document.getElementById('save-cloud-config');
@@ -974,89 +980,183 @@ async function handleClearData() {
 }
 
 /**
- * Voice — tap to enter conversation mode, tap to exit
- * 
- * Conversation mode: continuous listen → detect silence → send → AI responds with TTS → resume listening
- * One tap in, one tap out. Like talking to a person.
+ * Mic button — push to talk, single message. Tap to record, tap to stop.
+ * Puts text in input field, user can edit before sending.
  */
-async function handleVoice() {
-  const btn = document.getElementById('voice-btn');
+async function handleMic() {
+  const btn = document.getElementById('mic-btn');
   const input = document.getElementById('chat-input');
 
   if (!voice.supported) {
-    ui.showNotification('Voice not supported in this browser', 'error');
+    ui.showNotification('Voice not supported', 'error');
     return;
   }
 
-  // If already in conversation mode — exit
+  if (voice.isRecording) {
+    btn.classList.remove('active');
+    const result = await voice.stopRecording();
+    input.placeholder = 'Message...';
+    if (result.text) {
+      input.value = result.text;
+      ui.autoResizeInput();
+      ui.setSendEnabled(true);
+    }
+    return;
+  }
+
+  try {
+    voice.onInterimResult = (text) => {
+      input.value = text;
+      ui.autoResizeInput();
+    };
+    await voice.startRecording();
+    btn.classList.add('active');
+    input.placeholder = 'Listening...';
+    input.value = '';
+  } catch (err) {
+    btn.classList.remove('active');
+    input.placeholder = 'Message...';
+    ui.showNotification('Mic: ' + err.message, 'error');
+  }
+}
+
+/**
+ * Conversation mode — continuous voice loop.
+ * Toggle on/off. When on: listen → silence → send → TTS → listen again.
+ */
+async function handleConversation() {
+  const btn = document.getElementById('conv-btn');
+  const input = document.getElementById('chat-input');
+
+  if (!voice.supported) {
+    ui.showNotification('Voice not supported', 'error');
+    return;
+  }
+
   if (voice.conversationMode) {
     voice.stopConversation();
+    btn.classList.remove('active');
     input.value = '';
     input.placeholder = 'Message...';
     return;
   }
 
-  // Enter conversation mode
   try {
-    // Show interim text as user speaks
     voice.onInterimResult = (text) => {
       input.value = text;
       ui.autoResizeInput();
     };
 
-    // When silence detected — auto-send and get voiced response
     voice.onSilenceDetected = async (text) => {
       if (!text.trim()) return;
       input.value = '';
-
-      await auditLog('voice_input', { method: 'conversation', length: text.length });
       await sendMessage(text);
 
-      // Speak AI response
       const lastMsg = state.messages[state.messages.length - 1];
       if (lastMsg && lastMsg.role === 'assistant' && voice.ttsEnabled) {
         await voice.speak(lastMsg.content);
       }
 
-      // Resume listening (conversation continues)
       if (voice.conversationMode) {
         voice.resumeListening();
       }
     };
 
     await voice.startConversation();
-    input.placeholder = 'Listening...';
+    btn.classList.add('active');
+    input.placeholder = 'Conversation mode...';
     input.value = '';
   } catch (err) {
+    btn.classList.remove('active');
     input.placeholder = 'Message...';
-    ui.showNotification('Mic error: ' + err.message, 'error');
+    ui.showNotification('Mic: ' + err.message, 'error');
   }
 }
 
 /**
- * Voice state change — updates UI
+ * Sidebar toggle
+ */
+function toggleSidebar(open) {
+  const sidebar = document.getElementById('chat-sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (open) {
+    sidebar?.classList.add('open');
+    overlay?.classList.add('open');
+    loadSidebarHistory();
+  } else {
+    sidebar?.classList.remove('open');
+    overlay?.classList.remove('open');
+  }
+}
+
+async function loadSidebarHistory() {
+  if (!memoryReady) return;
+  try {
+    const convs = await memory.getConversations();
+    const list = document.getElementById('sidebar-list');
+    if (!list) return;
+    list.innerHTML = '';
+    for (const conv of convs) {
+      const item = document.createElement('div');
+      item.className = 'sidebar-item' + (conv.id === state.conversationId ? ' active' : '');
+      item.innerHTML = '<div class="sidebar-item-title">' + (conv.title || 'Untitled') + '</div><div class="sidebar-item-date">' + formatDate(conv.updatedAt || conv.createdAt) + '</div>';
+      item.addEventListener('click', () => loadConversationFromSidebar(conv.id));
+      list.appendChild(item);
+    }
+  } catch {}
+}
+
+function formatDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const diff = now - d;
+  if (diff < 60000) return 'Just now';
+  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
+  return d.toLocaleDateString();
+}
+
+async function loadConversationFromSidebar(id) {
+  if (!memoryReady) return;
+  try {
+    const conv = await memory.loadConversation(id);
+    if (conv && conv.messages) {
+      state.conversationId = id;
+      state.messages = conv.messages;
+      ui.clearMessages();
+      for (const msg of conv.messages) {
+        ui.renderMessage(msg.role, msg.content, false, msg.image || null);
+      }
+      savePref('last_conversation_id', id);
+    }
+  } catch {}
+  toggleSidebar(false);
+}
+
+/**
+ * Voice state UI
  */
 voice.onStateChange = (s) => {
-  const btn = document.getElementById('voice-btn');
+  const micBtn = document.getElementById('mic-btn');
+  const convBtn = document.getElementById('conv-btn');
   const input = document.getElementById('chat-input');
-  if (!btn || !input) return;
+  if (!input) return;
 
   switch (s) {
     case 'listening':
-      btn.classList.add('active');
-      input.placeholder = 'Listening...';
+      input.placeholder = voice.conversationMode ? 'Conversation mode...' : 'Listening...';
       break;
     case 'processing':
-      btn.classList.add('active'); // keep red while processing
       input.placeholder = 'Thinking...';
       break;
     case 'speaking':
-      btn.classList.add('active'); // keep red while speaking
       input.placeholder = 'Speaking...';
       break;
     default:
       if (!voice.conversationMode) {
-        btn.classList.remove('active');
+        if (micBtn) micBtn.classList.remove('active');
+        if (convBtn) convBtn.classList.remove('active');
         input.placeholder = 'Message...';
       }
   }

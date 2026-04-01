@@ -76,7 +76,7 @@ export class Voice {
     }
 
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       this.audioChunks = [];
 
       // Determine best supported mime type
@@ -309,7 +309,7 @@ export class Voice {
       this._setState('speaking');
 
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.05;
+      utterance.rate = 1.2;
       utterance.pitch = 1.0;
       utterance.volume = 1.0;
 

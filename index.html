@@ -829,6 +829,111 @@
       object-fit: cover;
     }
 
+    /* Sidebar */
+    .chat-sidebar {
+      position: fixed;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 280px;
+      background: var(--surface);
+      z-index: 20;
+      transform: translateX(-100%);
+      transition: transform 0.3s ease;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding-top: var(--safe-top);
+    }
+
+    .chat-sidebar.open {
+      transform: translateX(0);
+    }
+
+    .sidebar-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 19;
+      display: none;
+    }
+
+    .sidebar-overlay.open {
+      display: block;
+    }
+
+    .sidebar-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .sidebar-header h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .sidebar-new-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--fg-muted);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .sidebar-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .sidebar-item {
+      padding: 12px 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-bottom: 4px;
+      transition: background 0.2s;
+    }
+
+    .sidebar-item:hover {
+      background: rgba(255,255,255,0.05);
+    }
+
+    .sidebar-item.active {
+      background: rgba(255,255,255,0.08);
+    }
+
+    .sidebar-item-title {
+      font-size: 14px;
+      color: var(--fg);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sidebar-item-date {
+      font-size: 11px;
+      color: var(--fg-dim);
+      margin-top: 4px;
+    }
+
+    .chat-header-menu {
+      background: none;
+      border: none;
+      color: var(--fg-muted);
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+    }
+
     /* Settings */
     #settings {
       padding-top: var(--safe-top);
@@ -1350,6 +1455,36 @@
       margin-bottom: 8px;
     }
 
+    /* Chat Sidebar */
+    .chat-sidebar { position:fixed; left:0; top:0; bottom:0; width:280px; background:var(--surface); z-index:20; transform:translateX(-100%); transition:transform 0.3s ease; padding:env(safe-area-inset-top) 0 0; border-right:1px solid var(--border); display:flex; flex-direction:column; }
+    .chat-sidebar.open { transform:translateX(0); }
+    .sidebar-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:19; display:none; }
+    .sidebar-overlay.open { display:block; }
+    .sidebar-header { padding:16px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
+    .sidebar-header h3 { font-size:16px; font-weight:600; }
+    .sidebar-new-btn { background:none; border:1px solid var(--border); color:var(--fg-muted); padding:6px 12px; border-radius:8px; font-size:13px; cursor:pointer; font-family:inherit; }
+    .sidebar-list { flex:1; overflow-y:auto; padding:8px; }
+    .sidebar-item { padding:12px 16px; border-radius:10px; cursor:pointer; margin-bottom:4px; transition:background 0.2s; }
+    .sidebar-item:hover { background:rgba(255,255,255,0.05); }
+    .sidebar-item.active { background:rgba(255,255,255,0.08); }
+    .sidebar-item-title { font-size:14px; color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .sidebar-item-date { font-size:11px; color:var(--fg-dim); margin-top:4px; }
+    .sidebar-empty { padding:24px 16px; color:var(--fg-dim); font-size:13px; text-align:center; }
+
+    /* Mic and Conversation buttons */
+    .mic-btn.active {
+      color: #ffffff;
+      border-color: #ff4444;
+      background: #ff4444;
+    }
+
+    .conv-btn.active {
+      color: #ff4444;
+      border-color: #ff4444;
+      background: rgba(255,68,68,0.1);
+      animation: voicePulse 1.5s ease infinite;
+    }
+
     /* Scrollbar */
     ::-webkit-scrollbar {
       width: 4px;
@@ -1382,13 +1517,13 @@
       <div class="hero-orb hero-orb-3"></div>
       <div class="hero-grid"></div>
     </div>
-    <h1 class="hero-title">AI Space</h1>
+    <img src="https://capsule-render.vercel.app/api?type=venom&height=200&color=0:0a0a0a,100:1a1a2e&text=AI%20SPACE&fontSize=90&fontColor=ffffff&animation=fadeIn&stroke=333333&strokeWidth=1" width="100%" alt="AI Space" style="max-width:600px;">
     <p class="hero-subtitle">Your space. Your AI. Your device.</p>
     <p class="hero-desc">A privacy-first personal AI that lives entirely on your phone. No cloud. No account. No app store.</p>
     <div class="hero-badges">
-      <span class="hero-badge">🔒 Private</span>
-      <span class="hero-badge">⚡ Local</span>
-      <span class="hero-badge">📱 Offline</span>
+      <span class="hero-badge">Private</span>
+      <span class="hero-badge">Local</span>
+      <span class="hero-badge">Offline</span>
     </div>
     <button class="hero-cta" id="enter-app">Enter your space →</button>
     <div class="scroll-hint">
@@ -1402,21 +1537,21 @@
     <h2 class="section-title">Built different.</h2>
     <div class="features-grid">
       <div class="feature">
-        <div class="feature-icon">🔒</div>
+        <div class="feature-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg></div>
         <div class="feature-content">
           <h3>Private by default</h3>
           <p>Your data never leaves your device. Zero cloud. Zero tracking.</p>
         </div>
       </div>
       <div class="feature">
-        <div class="feature-icon">⚡</div>
+        <div class="feature-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg></div>
         <div class="feature-content">
           <h3>Runs locally</h3>
           <p>AI model runs directly on your phone using WebGPU. No internet needed.</p>
         </div>
       </div>
       <div class="feature">
-        <div class="feature-icon">🔗</div>
+        <div class="feature-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg></div>
         <div class="feature-content">
           <h3>Device connected</h3>
           <p>iOS Shortcuts relay gives your AI eyes and hands on your phone.</p>
@@ -1477,7 +1612,7 @@
 
   <!-- TRUST -->
   <section class="trust-section landing-section" id="landing-trust">
-    <div class="trust-icon">🛡️</div>
+    <div class="trust-icon" style="font-size:24px;color:var(--fg-dim);">—</div>
     <h2 class="trust-title">See everything. Control everything.</h2>
     <p class="trust-text">Every API call logged. Every byte of data accounted for. Full audit trail, client-side encryption, and total transparency. You don't have to trust us — you can verify.</p>
   </section>
@@ -1505,8 +1640,8 @@
     </div>
 
     <!-- Step 0: Welcome -->
-    <div class="onboarding-step" id="onboarding-step-0" data-step="0">
-      <h1 class="onboarding-hero-title">AI Space</h1>
+    <div class="onboarding-step" id="onboarding-step-0" data-step="0" style="gap:20px;">
+      <img src="https://capsule-render.vercel.app/api?type=venom&height=150&color=0:0a0a0a,100:1a1a2e&text=AI%20SPACE&fontSize=70&fontColor=ffffff&animation=fadeIn&stroke=333333&strokeWidth=1" alt="AI Space" style="max-width:400px;width:100%;">
       <p class="onboarding-step-subtitle">Let's set up your space</p>
     </div>
 
@@ -1515,12 +1650,12 @@
       <h2 class="onboarding-step-title">How do you prefer?</h2>
       <div class="onboarding-cards">
         <div class="onboarding-card" data-mode="chat">
-          <div class="onboarding-card-icon">💬</div>
+          <div class="onboarding-card-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
           <div class="onboarding-card-label">Chat</div>
           <div class="onboarding-card-desc">Text-based, type your thoughts</div>
         </div>
         <div class="onboarding-card" data-mode="talk">
-          <div class="onboarding-card-icon">🎙️</div>
+          <div class="onboarding-card-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 10v2a7 7 0 01-14 0v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
           <div class="onboarding-card-label">Talk</div>
           <div class="onboarding-card-desc">Voice-first, speak naturally</div>
         </div>
@@ -1549,22 +1684,22 @@
       <h2 class="onboarding-step-title">How should I talk to you?</h2>
       <div class="onboarding-cards" id="onboarding-tone-cards">
         <div class="onboarding-card onboarding-card-small" data-tone="casual">
-          <div class="onboarding-card-icon">😎</div>
+          <div class="onboarding-card-icon"></div>
           <div class="onboarding-card-label">Casual</div>
           <div class="onboarding-card-desc">Relaxed, friendly</div>
         </div>
         <div class="onboarding-card onboarding-card-small selected" data-tone="balanced">
-          <div class="onboarding-card-icon">🤝</div>
+          <div class="onboarding-card-icon"></div>
           <div class="onboarding-card-label">Balanced</div>
           <div class="onboarding-card-desc">Warm but clear</div>
         </div>
         <div class="onboarding-card onboarding-card-small" data-tone="professional">
-          <div class="onboarding-card-icon">💼</div>
+          <div class="onboarding-card-icon"></div>
           <div class="onboarding-card-label">Professional</div>
           <div class="onboarding-card-desc">Precise, efficient</div>
         </div>
         <div class="onboarding-card onboarding-card-small" data-tone="playful">
-          <div class="onboarding-card-icon">🎨</div>
+          <div class="onboarding-card-icon"></div>
           <div class="onboarding-card-label">Playful</div>
           <div class="onboarding-card-desc">Fun, creative</div>
         </div>
@@ -1598,12 +1733,24 @@
     </div>
   </div>
 
+  <!-- Chat Sidebar -->
+  <div class="chat-sidebar" id="chat-sidebar">
+    <div class="sidebar-header">
+      <h3>Conversations</h3>
+      <button id="new-chat-btn" class="sidebar-new-btn">+ New</button>
+    </div>
+    <div class="sidebar-list" id="sidebar-list"></div>
+  </div>
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
   <!-- Chat View -->
   <div id="chat" class="view">
     <div class="chat-header">
       <div class="chat-header-left">
+        <button class="chat-header-btn" id="menu-btn" title="Menu">
+          <svg viewBox="0 0 24 24" fill="none" width="20" height="20"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
         <span class="chat-header-title">AI Space</span>
-        <button class="chat-header-btn" id="new-chat-btn" title="New conversation">+</button>
       </div>
       <button class="chat-header-btn" id="open-settings">Settings</button>
     </div>
@@ -1615,18 +1762,13 @@
         <div class="typing-dot"></div>
       </div>
     </div>
-    <!-- Image preview -->
-    <div class="chat-image-preview" id="image-preview" style="display:none;">
-      <img id="preview-img" alt="">
-      <button class="chat-image-remove" id="remove-image">✕</button>
-    </div>
     <div class="chat-input-area">
-      <button class="chat-input-btn" id="camera-btn" title="Photo">
-        <svg viewBox="0 0 24 24" fill="none" width="20" height="20"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="1.5"/></svg>
-      </button>
       <textarea class="chat-input" id="chat-input" rows="1" placeholder="Message..." autocomplete="off"></textarea>
-      <button class="chat-input-btn" id="voice-btn" title="Voice">
-        <svg viewBox="0 0 24 24" fill="none" width="20" height="20"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <button class="chat-input-btn" id="mic-btn" title="Push to talk">
+        <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="chat-input-btn" id="conv-btn" title="Conversation mode">
+        <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><path d="M2 10h2M6 6h2M6 14h2M10 2h2M10 18h2M14 6h2M14 14h2M18 10h2M22 10h0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
       <button class="chat-send" id="send-btn" disabled>
         <svg viewBox="0 0 24 24" fill="none">
