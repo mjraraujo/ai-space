@@ -830,6 +830,24 @@
       object-fit: cover;
     }
 
+    .image-preview-remove {
+      position: absolute;
+      top: 4px;
+      right: 12px;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      width: 22px;
+      height: 22px;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
     .chat-image-remove {
       position: absolute;
       top: 4px;
@@ -1826,11 +1844,22 @@
 
     <!-- Step 6: Ready -->
     <div class="onboarding-step" id="onboarding-step-6" data-step="6">
-      <h2 class="onboarding-step-title" id="onboarding-ready-title">You're all set.</h2>
+      <h2 class="onboarding-step-title" id="onboarding-ready-title">Choose your AI model</h2>
       <div id="onboarding-ready-status">
         <div class="onboarding-mode-badge" id="onboarding-mode-badge"></div>
-        <p class="onboarding-info" id="onboarding-ready-info"></p>
+        <p class="onboarding-info" id="onboarding-ready-info">Pick a model to download. Smaller = faster download. You can always switch later in Settings.</p>
       </div>
+      <!-- Model picker (shown when WebGPU is available) -->
+      <div id="onboarding-model-section" style="display:none;width:100%;max-width:340px;margin:0 auto 16px;">
+        <select class="onboarding-input" id="onboarding-model-picker" style="appearance:auto;-webkit-appearance:auto;cursor:pointer;">
+          <option value="SmolLM2-360M-Instruct-q4f16_1-MLC">SmolLM2 360M — 200 MB  (fastest, start here)</option>
+          <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC" selected>Qwen 2.5 0.5B — 350 MB  (recommended)</option>
+          <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B — 700 MB  (stronger reasoning)</option>
+          <option value="Phi-3.5-mini-instruct-q4f16_1-MLC">Phi 3.5 Mini 3.8B — 2.2 GB  (most capable, needs 4 GB+ RAM)</option>
+        </select>
+        <p style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.5;">Downloaded once, runs offline forever after that. Model stays on your device — never uploaded.</p>
+      </div>
+      <!-- Download progress (shown while downloading) -->
       <div class="onboarding-progress-inline" id="onboarding-download-progress" style="display:none;">
         <svg class="progress-ring" viewBox="0 0 64 64">
           <circle class="progress-ring-circle" cx="32" cy="32" r="28"/>
@@ -1838,7 +1867,16 @@
         </svg>
         <div class="progress-status" id="progress-status">Preparing your AI...</div>
       </div>
-      <button class="onboarding-cta" id="onboarding-enter">Enter your space →</button>
+      <!-- Download error / retry (shown on failure) -->
+      <div id="onboarding-download-error" style="display:none;width:100%;max-width:340px;margin:0 auto 12px;padding:12px;background:rgba(255,68,68,0.08);border:1px solid rgba(255,68,68,0.25);border-radius:12px;">
+        <p id="onboarding-download-error-msg" style="font-size:13px;color:#ff6b6b;margin-bottom:10px;line-height:1.5;"></p>
+        <div style="display:flex;gap:8px;">
+          <button class="onboarding-cta" id="onboarding-retry-download" style="flex:1;font-size:14px;padding:10px 0;">Retry Download</button>
+          <button class="onboarding-cta" id="onboarding-skip-to-cloud" style="flex:1;font-size:14px;padding:10px 0;background:var(--surface);color:var(--fg-muted);border:1px solid var(--border);">Use Cloud Mode</button>
+        </div>
+      </div>
+      <button class="onboarding-cta" id="onboarding-start-download" style="display:none;">Download &amp; Start</button>
+      <button class="onboarding-cta" id="onboarding-enter" style="display:none;">Enter your space →</button>
     </div>
   </div>
 
@@ -1873,8 +1911,15 @@
         <div class="typing-dot"></div>
       </div>
     </div>
+    <div class="chat-image-preview" id="image-preview" style="display:none;">
+      <img id="preview-img" src="" alt="Attached image">
+      <button class="image-preview-remove" id="remove-image" title="Remove image">&times;</button>
+    </div>
     <div class="chat-input-area">
       <textarea class="chat-input" id="chat-input" rows="1" placeholder="Message..." autocomplete="off"></textarea>
+      <button class="chat-input-btn" id="camera-btn" title="Attach image">
+        <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
       <button class="chat-input-btn" id="mic-btn" title="Push to talk">
         <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -1924,50 +1969,93 @@
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title">Relay Control</div>
+        <div class="settings-section-title">Relay Hub <span style="font-size:11px;color:var(--fg-dim);font-weight:400;margin-left:6px;">Beta</span></div>
         <div class="settings-card" style="padding:16px;">
-          <label class="settings-input-label">Relay</label>
+          <p style="font-size:13px;color:var(--fg-muted);line-height:1.55;margin-bottom:14px;">
+            <strong style="color:var(--fg);">What is a Relay?</strong><br>
+            A Relay is a prompt-based instruction artifact you send to your AI. It tells the AI how to format a command for a specific channel — iOS Shortcuts, your browser, or your device — so you can automate tasks across your apps without any servers.
+          </p>
+
+          <details style="margin-bottom:14px;">
+            <summary style="font-size:13px;color:var(--fg-muted);cursor:pointer;user-select:none;">How to use (3 steps) ▸</summary>
+            <ol style="font-size:13px;color:var(--fg-dim);line-height:1.7;margin:10px 0 0 16px;">
+              <li>Choose a <strong style="color:var(--fg);">Relay</strong> (iOS Shortcuts, Browser, or Device).</li>
+              <li>Choose an <strong style="color:var(--fg);">Action</strong> (e.g. Summarize, Draft Reply, Morning Briefing).</li>
+              <li>Paste your content, tap <strong style="color:var(--fg);">Build Relay Artifact</strong>. The prompt is loaded in chat — review it, then Send.</li>
+            </ol>
+            <p style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.5;">
+              Tip: You can also type in chat, e.g. <em>"build a shortcuts relay to summarize this text: ..."</em>
+            </p>
+          </details>
+
+          <label class="settings-input-label">1. Relay channel</label>
           <select class="settings-input" id="relay-type" style="appearance:auto;-webkit-appearance:auto;"></select>
 
-          <label class="settings-input-label">Action</label>
+          <label class="settings-input-label">2. Action</label>
           <select class="settings-input" id="relay-action" style="appearance:auto;-webkit-appearance:auto;"></select>
 
-          <label class="settings-input-label">Artifact Preset</label>
+          <label class="settings-input-label">3. AI output style</label>
           <select class="settings-input" id="relay-provider" style="appearance:auto;-webkit-appearance:auto;"></select>
 
-          <label class="settings-input-label">Input</label>
-          <textarea class="settings-input" id="relay-content" rows="4" placeholder="Paste content/context to control via relay..."></textarea>
+          <label class="settings-input-label">Content / context (optional)</label>
+          <textarea class="settings-input" id="relay-content" rows="3" placeholder="Paste the text, URL, or context you want the AI to work with…"></textarea>
 
-          <div style="font-size:12px;color:var(--fg-dim);margin-top:8px;" id="relay-hint">Step 1: Build artifact. Step 2: send it in chat, or use "Build + Send".</div>
+          <div style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.4;" id="relay-hint">
+            Build Artifact → loads the prompt in chat for review. Build + Send → builds and sends immediately.
+          </div>
           <div style="display:flex;gap:8px;margin-top:12px;">
-            <button class="settings-btn" id="relay-build-btn" style="flex:1;">Build Relay Artifact</button>
+            <button class="settings-btn" id="relay-build-btn" style="flex:1;">Build Artifact</button>
             <button class="settings-btn" id="relay-run-btn" style="flex:1;">Build + Send</button>
           </div>
         </div>
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title">Background Runtime (Beta)</div>
+        <div class="settings-section-title">Background Runtime <span style="font-size:11px;color:var(--fg-dim);font-weight:400;margin-left:6px;">Beta</span></div>
         <div class="settings-card" style="padding:16px;">
-          <label class="settings-input-label">Runtime Power</label>
+          <p style="font-size:13px;color:var(--fg-muted);line-height:1.55;margin-bottom:14px;">
+            <strong style="color:var(--fg);">What is the Runtime?</strong><br>
+            A sandboxed mini-terminal that runs scripts inside a Web Worker — off the UI thread, locally on your device. Use it to ping URLs, fetch data, navigate tabs, or chain commands without cloud.
+          </p>
+
+          <details style="margin-bottom:14px;">
+            <summary style="font-size:13px;color:var(--fg-muted);cursor:pointer;user-select:none;">DSL command reference ▸</summary>
+            <table style="font-size:12px;color:var(--fg-dim);line-height:1.7;margin-top:10px;width:100%;border-collapse:collapse;">
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">LOG &lt;text&gt;</td><td>Print a message to output</td></tr>
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">WAIT &lt;ms&gt;</td><td>Pause execution (max 60 000 ms)</td></tr>
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">RUN fetch &lt;url&gt; -&gt; v</td><td>HTTP GET, store result in <em>v</em></td></tr>
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">RUN json &lt;url&gt; -&gt; v</td><td>Fetch &amp; parse JSON into <em>v</em></td></tr>
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">RUN echo &lt;text&gt;</td><td>Echo text (useful for testing)</td></tr>
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">RUN now</td><td>Print current ISO timestamp</td></tr>
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">NAVIGATE &lt;url&gt;</td><td>Request browser navigation</td></tr>
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">RETURN &lt;text&gt;</td><td>Return a string result &amp; exit</td></tr>
+              <tr><td style="padding:3px 8px 3px 0;color:var(--fg);font-family:monospace;white-space:nowrap;">RETURNJSON &lt;json&gt;</td><td>Return a JSON object &amp; exit</td></tr>
+            </table>
+            <p style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.5;">
+              Use <code style="background:var(--surface);padding:1px 4px;border-radius:4px;">&#123;&#123;var.path&#125;&#125;</code> to interpolate stored values.<br>
+              Example: <code style="background:var(--surface);padding:1px 4px;border-radius:4px;">LOG Status: &#123;&#123;api.status&#125;&#125;</code>
+            </p>
+          </details>
+
+          <label class="settings-input-label">Power mode</label>
           <select class="settings-input" id="runtime-mode" style="appearance:auto;-webkit-appearance:auto;">
-            <option value="strict">Strict (recommended)</option>
-            <option value="trusted">Trusted (more local power)</option>
+            <option value="strict">Strict — DSL commands only (safe)</option>
+            <option value="trusted">Trusted — full JS access (advanced)</option>
           </select>
 
-          <label class="settings-input-label">Preset</label>
+          <label class="settings-input-label">Preset script</label>
           <select class="settings-input" id="runtime-preset" style="appearance:auto;-webkit-appearance:auto;"></select>
 
-          <label class="settings-input-label">Script</label>
-          <textarea class="settings-input" id="runtime-script" rows="8" placeholder="Use DSL commands: LOG text, RUN fetch https://..., RUN json https://... -> api, NAVIGATE https://..., WAIT 1500, RETURNJSON {&quot;ok&quot;:true}"></textarea>
+          <label class="settings-input-label">Script editor</label>
+          <textarea class="settings-input" id="runtime-script" rows="8" style="font-family:monospace;font-size:12px;" placeholder="# Write DSL commands here, one per line&#10;LOG Hello from the runtime!&#10;RUN json https://api.github.com/zen -> zen&#10;LOG {{zen.output}}&#10;RETURNJSON {&quot;done&quot;: true}"></textarea>
 
           <div style="display:flex;gap:8px;margin-top:12px;">
-            <button class="settings-btn" id="runtime-run-btn" style="flex:1;">Run In Background</button>
-            <button class="settings-btn" id="runtime-stop-btn" style="flex:1;" disabled>Stop</button>
+            <button class="settings-btn" id="runtime-run-btn" style="flex:1;">▶ Run in Background</button>
+            <button class="settings-btn" id="runtime-stop-btn" style="flex:1;" disabled>■ Stop</button>
           </div>
 
-          <div id="runtime-hint" style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.4;">Local-first mini terminal in a Web Worker. DSL commands: LOG, RUN, WAIT, NAVIGATE, RETURN, RETURNJSON. Use {{var.path}} interpolation.</div>
-          <pre id="runtime-output" style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;max-height:180px;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:1.45;"></pre>
+          <div id="runtime-hint" style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.4;"></div>
+          <pre id="runtime-output" style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;max-height:200px;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:1.45;font-family:monospace;"></pre>
         </div>
       </div>
 
@@ -1982,7 +2070,7 @@
         </div>
       </div>
 
-      <div class="settings-section">
+      <div class="settings-section" id="cloud-config">
         <div class="settings-section-title">Cloud API</div>
         <div class="settings-card" style="padding: 16px;">
           <label class="settings-input-label">Provider</label>

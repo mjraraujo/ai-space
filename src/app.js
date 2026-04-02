@@ -713,12 +713,16 @@ function populateVoicePicker() {
 }
 
 /**
- * Setup the ready step — check WebGPU, show mode, optional download
+ * Setup the ready step — check WebGPU, show model picker or cloud fallback
  */
 async function setupReadyStep() {
   const badge = document.getElementById('onboarding-mode-badge');
   const info = document.getElementById('onboarding-ready-info');
+  const modelSection = document.getElementById('onboarding-model-section');
+  const startDownloadBtn = document.getElementById('onboarding-start-download');
+  const enterBtn = document.getElementById('onboarding-enter');
   const downloadEl = document.getElementById('onboarding-download-progress');
+  const errorEl = document.getElementById('onboarding-download-error');
 
   let hasWebGPU = false;
   try {
@@ -728,37 +732,81 @@ async function setupReadyStep() {
   }
 
   if (hasWebGPU) {
-    if (badge) badge.textContent = '⚡ Running locally on your device';
-    if (info) info.textContent = 'Your AI model will download now. After that, everything runs offline on your device.';
-    if (downloadEl) downloadEl.style.display = 'flex';
-
-    // Start model download
-    try {
-      const selectedModel = document.getElementById('onboarding-model-picker')?.value || null;
-      await engine.init(selectedModel, (progress) => {
-        const pct = Math.round((progress.progress || 0) * 100);
-        ui.updateProgress(pct, progress.text || 'Downloading...');
-      });
-      const loadedModelId = engine.getStatus().modelId;
-      await auditLog('model_load', { model: loadedModelId, success: true });
-      savePref('selected_model', loadedModelId);
-      ui.updateProgress(100, 'Ready!');
-    } catch (err) {
-      console.error('Model download failed:', err);
-      state.mode = 'cloud';
-      engine.mode = 'cloud';
-      savePref('mode', 'cloud');
-      if (badge) badge.textContent = '☁️ Running in cloud mode';
-      if (info) info.textContent = 'Local model failed to load. Using cloud mode instead.';
-      if (downloadEl) downloadEl.style.display = 'none';
-    }
+    if (badge) badge.textContent = '⚡ WebGPU available — runs on your device';
+    if (info) info.textContent = 'Pick a model to download. Smaller = faster. You can switch models anytime in Settings.';
+    if (modelSection) modelSection.style.display = 'block';
+    if (startDownloadBtn) startDownloadBtn.style.display = 'block';
+    if (enterBtn) enterBtn.style.display = 'none';
   } else {
     state.mode = 'cloud';
     engine.mode = 'cloud';
     savePref('mode', 'cloud');
-    if (badge) badge.textContent = '☁️ Running in cloud mode';
-    if (info) info.textContent = 'WebGPU is not available on this device. Using cloud mode for AI inference.';
+    if (badge) badge.textContent = '☁️ Cloud mode — WebGPU not available';
+    if (info) info.textContent = 'This browser/device does not support WebGPU. You can still use cloud AI — configure an API key in Settings.';
+    if (modelSection) modelSection.style.display = 'none';
+    if (startDownloadBtn) startDownloadBtn.style.display = 'none';
+    if (enterBtn) enterBtn.style.display = 'block';
+  }
+}
+
+/**
+ * Run the onboarding model download with retry support
+ */
+async function runOnboardingDownload(attempt = 1) {
+  const badge = document.getElementById('onboarding-mode-badge');
+  const downloadEl = document.getElementById('onboarding-download-progress');
+  const errorEl = document.getElementById('onboarding-download-error');
+  const errorMsg = document.getElementById('onboarding-download-error-msg');
+  const startDownloadBtn = document.getElementById('onboarding-start-download');
+  const enterBtn = document.getElementById('onboarding-enter');
+  const modelSection = document.getElementById('onboarding-model-section');
+
+  const selectedModel = document.getElementById('onboarding-model-picker')?.value || null;
+
+  if (startDownloadBtn) startDownloadBtn.style.display = 'none';
+  if (errorEl) errorEl.style.display = 'none';
+  if (modelSection) modelSection.style.display = 'none';
+  if (downloadEl) downloadEl.style.display = 'flex';
+  if (badge) badge.textContent = attempt > 1 ? `⚡ Downloading (attempt ${attempt})…` : '⚡ Downloading…';
+
+  try {
+    await engine.init(selectedModel, (progress) => {
+      const pct = Math.round((progress.progress || 0) * 100);
+      ui.updateProgress(pct, progress.text || `Downloading… ${pct}%`);
+    });
+
+    const loadedModelId = engine.getStatus().modelId;
+    await auditLog('model_load', { model: loadedModelId, success: true });
+    savePref('selected_model', loadedModelId);
+    ui.updateProgress(100, 'Model ready!');
+
     if (downloadEl) downloadEl.style.display = 'none';
+    if (badge) badge.textContent = '⚡ Running locally on your device';
+    if (enterBtn) enterBtn.style.display = 'block';
+  } catch (err) {
+    console.error('Model download failed:', err);
+    if (downloadEl) downloadEl.style.display = 'none';
+    if (badge) badge.textContent = '⚠️ Download failed';
+
+    const msg = err.message || '';
+    const lower = msg.toLowerCase();
+    const isRateLimit = lower.includes('quota') || lower.includes('rate') || lower.includes('429') || lower.includes('limit') || lower.includes('exceeded');
+    const isStorage = lower.includes('storage') || lower.includes('space') || lower.includes('disk') || lower.includes('quotaexceeded');
+
+    let userMsg;
+    if (isRateLimit) {
+      const waitSec = attempt <= 1 ? 60 : attempt * 90;
+      userMsg = `HuggingFace is rate-limiting downloads right now. Wait ${waitSec} seconds and tap "Retry Download". This is temporary.`;
+    } else if (isStorage) {
+      userMsg = 'Not enough browser storage. Free up space or choose a smaller model, then retry.';
+    } else {
+      userMsg = `Download failed: ${msg}. Check your connection and retry.`;
+    }
+
+    if (errorMsg) errorMsg.textContent = userMsg;
+    if (errorEl) errorEl.style.display = 'block';
+    if (modelSection) modelSection.style.display = 'block';
+    if (startDownloadBtn) startDownloadBtn.style.display = 'none'; // retry btn shown instead
   }
 }
 
@@ -990,6 +1038,36 @@ function wireEventListeners() {
   const enterBtn = document.getElementById('onboarding-enter');
   if (enterBtn) enterBtn.addEventListener('click', () => completeOnboarding());
 
+  // Step 6: Start download button
+  const startDownloadWireBtn = document.getElementById('onboarding-start-download');
+  if (startDownloadWireBtn) startDownloadWireBtn.addEventListener('click', () => runOnboardingDownload(1));
+
+  // Step 6: Retry download
+  const retryDownloadBtn = document.getElementById('onboarding-retry-download');
+  if (retryDownloadBtn) {
+    let _retryAttempt = 1;
+    retryDownloadBtn.addEventListener('click', () => {
+      _retryAttempt++;
+      runOnboardingDownload(_retryAttempt);
+    });
+  }
+
+  // Step 6: Skip to cloud mode
+  const skipToCloudBtn = document.getElementById('onboarding-skip-to-cloud');
+  if (skipToCloudBtn) skipToCloudBtn.addEventListener('click', () => {
+    state.mode = 'cloud';
+    engine.mode = 'cloud';
+    savePref('mode', 'cloud');
+    const badge = document.getElementById('onboarding-mode-badge');
+    if (badge) badge.textContent = '☁️ Cloud mode — configure API key in Settings';
+    const errorEl = document.getElementById('onboarding-download-error');
+    if (errorEl) errorEl.style.display = 'none';
+    const modelSection = document.getElementById('onboarding-model-section');
+    if (modelSection) modelSection.style.display = 'none';
+    const enterBtn2 = document.getElementById('onboarding-enter');
+    if (enterBtn2) enterBtn2.style.display = 'block';
+  });
+
   // Step 0: Manual continue for first impression control
   const startNowBtn = document.getElementById('onboarding-start-now');
   if (startNowBtn) startNowBtn.addEventListener('click', () => goToOnboardingStep(1));
@@ -1017,6 +1095,20 @@ function wireEventListeners() {
     ui.clearMessages();
     toggleSidebar(false);
     savePref('last_conversation_id', state.conversationId);
+  });
+
+  // Camera button
+  const cameraBtn = document.getElementById('camera-btn');
+  if (cameraBtn) cameraBtn.addEventListener('click', handleCamera);
+
+  // Remove attached image
+  const removeImageBtn = document.getElementById('remove-image');
+  if (removeImageBtn) removeImageBtn.addEventListener('click', () => {
+    pendingImage = null;
+    const preview = document.getElementById('image-preview');
+    if (preview) preview.style.display = 'none';
+    const previewImg = document.getElementById('preview-img');
+    if (previewImg) previewImg.src = '';
   });
 
   // Data management
@@ -1886,8 +1978,12 @@ async function handleDeleteConversation(id) {
   }
 }
 
+/** Track retry attempts per model to increase backoff guidance */
+let _switchModelAttempt = 0;
+let _switchModelId = '';
+
 /**
- * Switch local model — downloads new model on demand
+ * Switch local model — downloads new model on demand with retry guidance
  */
 async function handleSwitchModel() {
   const picker = document.getElementById('local-model-picker');
@@ -1896,6 +1992,14 @@ async function handleSwitchModel() {
   if (!picker) return;
 
   const modelId = picker.value;
+
+  // Reset attempt counter when model changes
+  if (modelId !== _switchModelId) {
+    _switchModelAttempt = 0;
+    _switchModelId = modelId;
+  }
+  _switchModelAttempt++;
+
   const currentModel = engine.getStatus().modelId;
   if (modelId === currentModel && engine.getStatus().status === 'ready') {
     ui.showNotification('Already using this model');
@@ -1904,7 +2008,8 @@ async function handleSwitchModel() {
 
   const hasWebGPU = await engine.checkWebGPU();
   if (!hasWebGPU) {
-    ui.showNotification('WebGPU not available on this device', 'error');
+    if (hint) hint.textContent = 'WebGPU is not supported in this browser. Try Chrome 113+ on desktop or Android.';
+    ui.showNotification('WebGPU not available', 'error');
     return;
   }
 
@@ -1916,20 +2021,21 @@ async function handleSwitchModel() {
     return;
   }
 
-  if (btn) btn.textContent = 'Downloading...';
-  if (hint) hint.textContent = 'Starting download...';
+  const attemptLabel = _switchModelAttempt > 1 ? ` (attempt ${_switchModelAttempt})` : '';
+  if (btn) btn.textContent = `Downloading${attemptLabel}…`;
+  if (hint) hint.textContent = 'Connecting to HuggingFace CDN…';
 
   try {
-    // Reset engine for new model
     engine.engine = null;
     engine.status = 'idle';
 
     await engine.init(modelId, (progress) => {
       const pct = Math.round((progress.progress || 0) * 100);
-      if (hint) hint.textContent = progress.text || `Downloading... ${pct}%`;
+      if (hint) hint.textContent = progress.text || `Downloading… ${pct}%`;
     });
 
-    if (hint) hint.textContent = 'Model ready — running on your device';
+    _switchModelAttempt = 0;
+    if (hint) hint.textContent = '✓ Model ready — running entirely on your device';
     if (btn) btn.textContent = 'Download & Switch';
     savePref('selected_model', modelId);
     ui.showNotification('Switched to ' + (engine.getStatus().modelInfo?.name || modelId));
@@ -1937,17 +2043,19 @@ async function handleSwitchModel() {
   } catch (err) {
     const msg = err.message || '';
     const lower = msg.toLowerCase();
-    const isQuota = lower.includes('quota') || lower.includes('rate') || lower.includes('429') || lower.includes('limit') || lower.includes('exceeded');
-    const isStorage = lower.includes('storage') || lower.includes('space') || lower.includes('disk') || lower.includes('quotaexceedederror');
-    if (isQuota) {
-      if (hint) hint.textContent = 'Download quota exceeded. Try a smaller model or wait a few minutes and retry.';
-      ui.showNotification('HuggingFace rate limit — try again in a few minutes', 'error');
+    const isRateLimit = lower.includes('quota') || lower.includes('rate') || lower.includes('429') || lower.includes('limit') || lower.includes('exceeded');
+    const isStorage = lower.includes('storage') || lower.includes('space') || lower.includes('disk') || lower.includes('quotaexceeded');
+
+    if (isRateLimit) {
+      const waitMin = _switchModelAttempt <= 1 ? 1 : _switchModelAttempt * 2;
+      if (hint) hint.textContent = `HuggingFace is rate-limiting right now. Wait ${waitMin} minute${waitMin > 1 ? 's' : ''} then tap "Retry Download". This is temporary and only affects the first download.`;
+      ui.showNotification(`Rate limit hit — wait ${waitMin}m then retry`, 'error');
     } else if (isStorage) {
-      if (hint) hint.textContent = 'Download failed due to storage limits. Free browser storage or pick a smaller model.';
+      if (hint) hint.textContent = 'Not enough browser storage. Free some space (clear other site data) or pick a smaller model like SmolLM2 360M.';
       ui.showNotification('Not enough storage for this model', 'error');
     } else {
-      if (hint) hint.textContent = 'Download failed: ' + msg;
-      ui.showNotification('Failed: ' + msg, 'error');
+      if (hint) hint.textContent = `Download failed: ${msg}. Check your connection and tap "Retry Download".`;
+      ui.showNotification('Download failed — tap Retry', 'error');
     }
     if (btn) btn.textContent = 'Retry Download';
   }
