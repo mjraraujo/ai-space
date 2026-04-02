@@ -25,6 +25,22 @@ AI Space now includes a local-first background runtime (beta) that runs in a Web
 
 This runtime is browser-compiled and sandboxed to web APIs, and does not execute host shell commands directly. Arbitrary JavaScript is blocked in `Strict` mode and allowed only in `Trusted` mode.
 
+### Local Model Skill Routing
+
+Relay and Runtime are also integrated as local-model skills triggered by chat intent.
+
+- Runtime examples:
+  - "run runtime health check"
+  - "run runtime relay artifact"
+  - "stop runtime"
+  - custom script in code block with "run runtime"
+- Relay examples:
+  - "create relay for browser web extract"
+  - "create relay to draft reply"
+  - "send relay now"
+
+When detected, these intents execute locally in the app controller before normal local inference.
+
 ## Local Internet Assist
 
 The local model can optionally consult internet context when online:

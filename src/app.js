@@ -41,12 +41,355 @@ let conversationTurnBusy = false;
 let pendingShortcutActions = [];
 let activeRuntimeJobId = null;
 let runtimeOutputLines = [];
+let liveActivityLines = [];
+let liveActivityAutoHideTimer = null;
 
 const MAX_RUNTIME_OUTPUT_LINES = 220;
 const MAX_RUNTIME_OUTPUT_LINE_LENGTH = 1200;
+const MAX_LIVE_ACTIVITY_LINES = 80;
+
+function setLiveActivityVisible(visible) {
+  const panel = document.getElementById('live-activity');
+  if (!panel) return;
+  panel.classList.toggle('visible', !!visible);
+}
+
+function setLiveActivityMode(mode) {
+  const panel = document.getElementById('live-activity');
+  if (!panel) return;
+  panel.classList.remove('mode-running', 'mode-error', 'mode-idle');
+  panel.classList.add(`mode-${mode}`);
+}
+
+function openLiveActivity(title, status, mode = 'running') {
+  if (liveActivityAutoHideTimer) {
+    clearTimeout(liveActivityAutoHideTimer);
+    liveActivityAutoHideTimer = null;
+  }
+  const titleEl = document.getElementById('live-activity-title');
+  const statusEl = document.getElementById('live-activity-status');
+  if (titleEl) titleEl.textContent = title;
+  if (statusEl) statusEl.textContent = status;
+  setLiveActivityMode(mode);
+  setLiveActivityVisible(true);
+}
+
+function closeLiveActivity(delayMs = 0) {
+  if (liveActivityAutoHideTimer) {
+    clearTimeout(liveActivityAutoHideTimer);
+    liveActivityAutoHideTimer = null;
+  }
+
+  if (delayMs > 0) {
+    liveActivityAutoHideTimer = setTimeout(() => {
+      setLiveActivityVisible(false);
+      liveActivityAutoHideTimer = null;
+    }, delayMs);
+    return;
+  }
+
+  setLiveActivityVisible(false);
+}
+
+function updateLiveActivityStatus(status, mode = 'running') {
+  const statusEl = document.getElementById('live-activity-status');
+  if (statusEl) statusEl.textContent = status;
+  setLiveActivityMode(mode);
+}
+
+function appendLiveActivityLog(line) {
+  const logEl = document.getElementById('live-activity-log');
+  if (!logEl) return;
+  const stamp = new Date().toLocaleTimeString();
+  const next = `[${stamp}] ${String(line ?? '').slice(0, MAX_RUNTIME_OUTPUT_LINE_LENGTH)}`;
+  liveActivityLines.push(next);
+  if (liveActivityLines.length > MAX_LIVE_ACTIVITY_LINES) {
+    liveActivityLines = liveActivityLines.slice(-MAX_LIVE_ACTIVITY_LINES);
+  }
+  logEl.textContent = liveActivityLines.join('\n');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function isWebLookupIntent(text) {
+  return /\b(search|find|lookup|look up|web|internet|wikipedia|google)\b/i.test(String(text || ''));
+}
+
+function extractWebQuery(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  const patterns = [
+    /(?:search|find|lookup|look up)(?:\s+(?:on|in)\s+the\s+web)?\s+(?:about\s+)?(.+)/i,
+    /(?:about|on)\s+(.+)/i
+  ];
+
+  for (const pattern of patterns) {
+    const m = raw.match(pattern);
+    if (m && m[1]) {
+      return m[1].trim();
+    }
+  }
+
+  return raw;
+}
+
+function looksLikeLegacyRuntimeScript(script) {
+  const s = String(script || '');
+  return /tools\.|\bawait\b|\bconst\b|;/.test(s);
+}
+
+function detectRuntimePresetFromText(text) {
+  const t = String(text || '').toLowerCase();
+  const presets = RuntimeAgent.getPresets();
+
+  const exact = presets.find((p) => t.includes(p.id.toLowerCase()));
+  if (exact) return exact;
+
+  if (t.includes('health') || t.includes('check status') || t.includes('deploy')) {
+    return presets.find((p) => p.id === 'health-check') || presets[0];
+  }
+  if (t.includes('artifact') || t.includes('relay')) {
+    return presets.find((p) => p.id === 'relay-artifact') || presets[0];
+  }
+  if (t.includes('navigate') || t.includes('open site') || t.includes('open page')) {
+    return presets.find((p) => p.id === 'navigate-flow') || presets[0];
+  }
+
+  return null;
+}
+
+function parseLocalSkillIntent(text) {
+  const raw = String(text || '').trim();
+  const lower = raw.toLowerCase();
+  if (!raw) return null;
+
+  if (/(stop|cancel)\s+runtime/.test(lower)) {
+    return { kind: 'runtime-stop' };
+  }
+
+  if (/send\s+relay\s+now|run\s+relay\s+now/.test(lower)) {
+    return { kind: 'relay-send-now' };
+  }
+
+  if (/(runtime|background\s+runtime|execute\s+runtime|run\s+runtime)/.test(lower)) {
+    const codeFence = raw.match(/```([\s\S]*?)```/);
+    const customScript = codeFence?.[1]?.trim() || '';
+    return {
+      kind: 'runtime-run',
+      customScript,
+      preset: customScript ? null : detectRuntimePresetFromText(raw)
+    };
+  }
+
+  if (/\brelay\b/.test(lower)) {
+    let relayId = 'shortcuts';
+    if (/(browser|web)/.test(lower)) relayId = 'browser';
+    if (/device/.test(lower)) relayId = 'device';
+
+    let actionId = 'summarize';
+    if (/(reply|draft)/.test(lower)) actionId = 'draft_reply';
+    else if (/(morning|briefing)/.test(lower)) actionId = 'morning_briefing';
+    else if (/(extract|scrape)/.test(lower)) actionId = 'web_extract';
+    else if (/(reminder|todo)/.test(lower)) actionId = 'create_reminder';
+
+    let providerId = 'local';
+    if (/claude/.test(lower)) providerId = 'claude';
+    else if (/openai|gpt/.test(lower)) providerId = 'openai';
+    else if (/gemini/.test(lower)) providerId = 'gemini';
+
+    const content = raw.replace(/.*relay\s*/i, '').trim() || raw;
+    return {
+      kind: 'relay-build',
+      relayId,
+      actionId,
+      providerId,
+      content
+    };
+  }
+
+  return null;
+}
+
+function runRuntimeSkill(script, runtimeModeForRun) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    const timeoutId = setTimeout(() => {
+      finish({ ok: false, message: 'Runtime timed out.' });
+    }, 30000);
+
+    activeRuntimeJobId = runtimeAgent.run(script, {
+      onLog: ({ text }) => appendRuntimeOutput(text),
+      onStatus: ({ status, url }) => {
+        if (status === 'navigate' && url) {
+          appendRuntimeOutput('Navigate requested: ' + url);
+        }
+      },
+      onDone: ({ result, durationMs }) => {
+        clearTimeout(timeoutId);
+        activeRuntimeJobId = null;
+        setRuntimeButtons(false);
+        finish({
+          ok: true,
+          message: `Runtime completed in ${durationMs}ms.`,
+          result
+        });
+      },
+      onError: ({ error }) => {
+        clearTimeout(timeoutId);
+        activeRuntimeJobId = null;
+        setRuntimeButtons(false);
+        finish({
+          ok: false,
+          message: 'Runtime failed: ' + error
+        });
+      }
+    }, {
+      runtimeMode: runtimeModeForRun
+    });
+  });
+}
+
+async function tryHandleLocalFeatureSkill(userText) {
+  const intent = parseLocalSkillIntent(userText);
+  if (!intent) return { handled: false };
+
+  if (intent.kind === 'runtime-stop') {
+    if (!activeRuntimeJobId) {
+      return { handled: true, response: 'Runtime is not running right now.' };
+    }
+    openLiveActivity('Runtime Skill', 'Stopping...', 'running');
+    const cancelled = runtimeAgent.cancel(activeRuntimeJobId);
+    activeRuntimeJobId = null;
+    setRuntimeButtons(false);
+    updateLiveActivityStatus(cancelled ? 'Stopped' : 'Stop failed', cancelled ? 'idle' : 'error');
+    closeLiveActivity(1500);
+    return {
+      handled: true,
+      response: cancelled ? 'Runtime stopped successfully.' : 'Could not stop runtime job.'
+    };
+  }
+
+  if (intent.kind === 'runtime-run') {
+    if (activeRuntimeJobId) {
+      return { handled: true, response: 'A runtime task is already running. Stop it first or wait to complete.' };
+    }
+
+    const preset = intent.preset;
+    const script = intent.customScript || preset?.script || RuntimeAgent.getPresets()[0]?.script || '';
+    if (!script) {
+      return { handled: true, response: 'No runtime script found to execute.' };
+    }
+
+    let runtimeModeForRun = state.runtimeMode;
+    if (runtimeModeForRun === 'strict' && looksLikeLegacyRuntimeScript(script)) {
+      runtimeModeForRun = 'trusted';
+      appendRuntimeOutput('Detected legacy JS-style script. Auto-switched this run to Trusted mode.');
+    }
+
+    appendRuntimeOutput('Starting runtime skill from chat...');
+    appendRuntimeOutput('Runtime mode: ' + runtimeModeForRun);
+    openLiveActivity('Runtime Skill', 'Executing from chat', 'running');
+    setRuntimeButtons(true);
+
+    const runtimeResult = await runRuntimeSkill(script, runtimeModeForRun);
+    if (!runtimeResult.ok) {
+      appendRuntimeOutput(runtimeResult.message);
+      updateLiveActivityStatus('Failed', 'error');
+      return { handled: true, response: runtimeResult.message };
+    }
+
+    updateLiveActivityStatus('Completed', 'idle');
+    closeLiveActivity(2500);
+
+    const label = preset ? `Preset: ${preset.name}` : 'Custom runtime script';
+    const resultText = runtimeResult.result !== undefined
+      ? `\nResult:\n${JSON.stringify(runtimeResult.result, null, 2)}`
+      : '';
+    return {
+      handled: true,
+      response: `${label} executed. ${runtimeResult.message}${resultText}`
+    };
+  }
+
+  if (intent.kind === 'relay-build') {
+    openLiveActivity('Relay Skill', 'Generating from chat intent', 'running');
+    const prompt = relays.buildArtifactPrompt({
+      relayId: intent.relayId,
+      actionId: intent.actionId,
+      providerId: intent.providerId,
+      content: intent.content
+    });
+
+    const inputEl = document.getElementById('chat-input');
+    if (inputEl) {
+      inputEl.value = prompt;
+      ui.autoResizeInput();
+      ui.setSendEnabled(true);
+    }
+
+    if (memoryReady) {
+      try {
+        await memory.savePreference('relay_type', intent.relayId);
+        await memory.savePreference('relay_action', intent.actionId);
+        await memory.savePreference('relay_provider', intent.providerId);
+      } catch {}
+    }
+
+    appendLiveActivityLog(`relay=${intent.relayId}, action=${intent.actionId}, provider=${intent.providerId}`);
+    updateLiveActivityStatus('Artifact ready', 'idle');
+    closeLiveActivity(2000);
+
+    return {
+      handled: true,
+      response: [
+        'Relay artifact generated as a local skill and prefilled in chat input.',
+        'You can edit it and send, or ask: "send relay now".',
+        '',
+        'Preview:',
+        '```text',
+        prompt.slice(0, 1200),
+        '```'
+      ].join('\n')
+    };
+  }
+
+  if (intent.kind === 'relay-send-now') {
+    openLiveActivity('Relay Skill', 'Sending prepared artifact', 'running');
+    const inputEl = document.getElementById('chat-input');
+    const prepared = inputEl?.value?.trim() || '';
+    if (!prepared || !prepared.includes('System constraints: local-first, cloud optional.')) {
+      updateLiveActivityStatus('No prepared artifact found', 'error');
+      return {
+        handled: true,
+        response: 'No prepared relay artifact found in chat input. Ask me to build one first.'
+      };
+    }
+
+    setTimeout(() => {
+      sendMessage(prepared);
+    }, 0);
+
+    appendLiveActivityLog('Relay artifact sent from chat skill.');
+    updateLiveActivityStatus('Sent', 'idle');
+    closeLiveActivity(2000);
+
+    return {
+      handled: true,
+      response: 'Relay artifact sent.'
+    };
+  }
+
+  return { handled: false };
+}
 
 async function fetchLocalInternetContext(query) {
-  const q = String(query || '').trim();
+  const q = extractWebQuery(query);
   if (!q || !navigator.onLine || !state.localInternetAssist) return '';
 
   const search = encodeURIComponent(q.slice(0, 180));
@@ -752,6 +1095,9 @@ function wireEventListeners() {
   const relayBuild = document.getElementById('relay-build-btn');
   if (relayBuild) relayBuild.addEventListener('click', handleBuildRelayArtifact);
 
+  const relayRun = document.getElementById('relay-run-btn');
+  if (relayRun) relayRun.addEventListener('click', handleRunRelayArtifact);
+
   const runtimePreset = document.getElementById('runtime-preset');
   if (runtimePreset) runtimePreset.addEventListener('change', handleRuntimePresetChange);
 
@@ -766,6 +1112,9 @@ function wireEventListeners() {
 
   const localInternetAssistEl = document.getElementById('local-internet-assist');
   if (localInternetAssistEl) localInternetAssistEl.addEventListener('change', handleLocalInternetAssistChange);
+
+  const liveClose = document.getElementById('live-activity-close');
+  if (liveClose) liveClose.addEventListener('click', () => closeLiveActivity());
 }
 
 async function handleRuntimeModeChange() {
@@ -812,6 +1161,7 @@ function appendRuntimeOutput(line) {
   }
   outputEl.textContent = runtimeOutputLines.join('\n');
   outputEl.scrollTop = outputEl.scrollHeight;
+  appendLiveActivityLog(line);
 }
 
 function setRuntimeButtons(isRunning) {
@@ -875,8 +1225,15 @@ async function handleRunRuntimeScript() {
     return;
   }
 
+  let runtimeModeForRun = state.runtimeMode;
+  if (runtimeModeForRun === 'strict' && looksLikeLegacyRuntimeScript(script)) {
+    runtimeModeForRun = 'trusted';
+    appendRuntimeOutput('Detected legacy JS-style script. Auto-switched this run to Trusted mode.');
+  }
+
   appendRuntimeOutput('Starting background runtime task...');
-  appendRuntimeOutput('Runtime mode: ' + state.runtimeMode);
+  appendRuntimeOutput('Runtime mode: ' + runtimeModeForRun);
+  openLiveActivity('Runtime', 'Running in background', 'running');
   setRuntimeButtons(true);
 
   activeRuntimeJobId = runtimeAgent.run(script, {
@@ -884,6 +1241,7 @@ async function handleRunRuntimeScript() {
     onStatus: ({ status, url }) => {
       if (status === 'navigate' && url) {
         appendRuntimeOutput('Navigate requested: ' + url);
+        updateLiveActivityStatus('Waiting for browser navigation', 'running');
         try {
           const tab = window.open(url, '_blank', 'noopener');
           if (!tab) {
@@ -894,6 +1252,7 @@ async function handleRunRuntimeScript() {
         } catch {}
       } else if (status === 'cancelled') {
         appendRuntimeOutput('Task cancelled');
+        updateLiveActivityStatus('Cancelled', 'idle');
       }
     },
     onDone: async ({ result, durationMs }) => {
@@ -901,10 +1260,12 @@ async function handleRunRuntimeScript() {
       if (result !== undefined) {
         appendRuntimeOutput('Result: ' + JSON.stringify(result));
       }
+      updateLiveActivityStatus('Completed', 'idle');
       setRuntimeButtons(false);
       activeRuntimeJobId = null;
       if (hintEl) hintEl.textContent = 'Background runtime idle.';
       ui.showNotification('Background task finished', 'success');
+      closeLiveActivity(3000);
 
       if (memoryReady && presetEl) {
         try {
@@ -915,16 +1276,17 @@ async function handleRunRuntimeScript() {
     },
     onError: ({ error }) => {
       appendRuntimeOutput('Error: ' + error);
+      updateLiveActivityStatus('Failed', 'error');
       setRuntimeButtons(false);
       activeRuntimeJobId = null;
       if (hintEl) hintEl.textContent = 'Background runtime failed. Fix script and retry.';
       ui.showNotification('Background task failed', 'error');
     }
   }, {
-    runtimeMode: state.runtimeMode
+    runtimeMode: runtimeModeForRun
   });
 
-  if (hintEl) hintEl.textContent = state.runtimeMode === 'trusted'
+  if (hintEl) hintEl.textContent = runtimeModeForRun === 'trusted'
     ? 'Trusted runtime running...'
     : 'Strict runtime running...';
 }
@@ -938,6 +1300,8 @@ function handleStopRuntimeScript() {
   setRuntimeButtons(false);
   if (cancelled) {
     appendRuntimeOutput('Stop requested by user');
+    updateLiveActivityStatus('Stopped by user', 'idle');
+    closeLiveActivity(1500);
     if (hintEl) hintEl.textContent = 'Background runtime stopped.';
     ui.showNotification('Background task stopped', 'success');
   }
@@ -1006,6 +1370,9 @@ async function handleBuildRelayArtifact() {
   const providerId = relayProviderEl.value || 'local';
   const content = relayContentEl.value || '';
 
+  openLiveActivity('Relay', 'Building artifact', 'running');
+  appendLiveActivityLog(`relay=${relayId}, action=${actionId}, provider=${providerId}`);
+
   const prompt = relays.buildArtifactPrompt({ relayId, actionId, providerId, content });
   inputEl.value = prompt;
   ui.autoResizeInput();
@@ -1024,7 +1391,25 @@ async function handleBuildRelayArtifact() {
   }
 
   transition('chat');
+  updateLiveActivityStatus('Artifact ready in chat input', 'idle');
+  closeLiveActivity(2000);
   ui.showNotification('Relay artifact ready in chat input', 'success');
+}
+
+async function handleRunRelayArtifact() {
+  openLiveActivity('Relay', 'Build + Send in progress', 'running');
+  await handleBuildRelayArtifact();
+  const inputEl = document.getElementById('chat-input');
+  const prompt = inputEl?.value?.trim() || '';
+  if (!prompt) {
+    updateLiveActivityStatus('Relay prompt not ready', 'error');
+    ui.showNotification('Relay prompt not ready', 'error');
+    return;
+  }
+  appendLiveActivityLog('Relay artifact sent to chat flow.');
+  updateLiveActivityStatus('Sent', 'idle');
+  closeLiveActivity(2000);
+  sendMessage(prompt);
 }
 
 function setupConnectivityListeners() {
@@ -1166,20 +1551,38 @@ async function sendMessage(text) {
     // Local inference
     ui.showTyping(true);
     try {
+      const localSkill = await tryHandleLocalFeatureSkill(text);
+      if (localSkill?.handled) {
+        ui.showTyping(false);
+        const responseText = localSkill.response || 'Local skill executed.';
+        ui.renderMessage('assistant', responseText);
+        state.messages.push({ role: 'assistant', content: responseText });
+        state.isGenerating = false;
+        const inputEl = document.getElementById('chat-input');
+        if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
+        return;
+      }
+
       ui.showTyping(false);
       ui.renderMessage('assistant', '', true);
 
       const modelMessages = [...state.messages];
+      const webIntent = isWebLookupIntent(text);
       if (state.localInternetAssist && navigator.onLine) {
         const liveContext = await fetchLocalInternetContext(text);
         if (liveContext) {
-          modelMessages.push({
+          modelMessages.unshift({
             role: 'system',
-            content: liveContext
+            content: `[WEB_CONTEXT]\n${liveContext}\nUse these snippets as available web context for this turn. Do not claim full browsing access.`
           });
           appendRuntimeOutput('Local internet context attached to current request.');
           await auditLog('internet_consult', { source: 'wikipedia-opensearch', queryLength: text.length });
+        } else if (webIntent) {
+          appendRuntimeOutput('Web lookup requested but no live context returned.');
+          ui.showNotification('No web results retrieved right now. Try a more specific query.', 'error');
         }
+      } else if (webIntent && !state.localInternetAssist) {
+        appendRuntimeOutput('Web lookup intent detected. Enable Local Internet Assist in Settings.');
       }
 
       let fullResponse = '';

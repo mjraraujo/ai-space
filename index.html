@@ -1203,6 +1203,90 @@
       border-color: #ff4444;
     }
 
+    /* Live activity popup */
+    .live-activity {
+      position: fixed;
+      right: 16px;
+      bottom: calc(16px + var(--safe-bottom));
+      width: min(92vw, 380px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+      z-index: 1001;
+      transform: translateY(24px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      overflow: hidden;
+    }
+
+    .live-activity.visible {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    .live-activity-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-soft);
+    }
+
+    .live-activity-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--fg);
+      letter-spacing: 0.01em;
+    }
+
+    .live-activity-status {
+      font-size: 12px;
+      color: var(--fg-dim);
+      margin-top: 2px;
+    }
+
+    .live-activity-close {
+      border: none;
+      background: transparent;
+      color: var(--fg-dim);
+      font-size: 16px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px;
+    }
+
+    .live-activity-log {
+      max-height: 180px;
+      overflow: auto;
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--fg);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    }
+
+    .live-activity.mode-running .live-activity-status {
+      color: #2a8f3a;
+    }
+
+    .live-activity.mode-error .live-activity-status {
+      color: #d1495b;
+    }
+
+    @media (max-width: 768px) {
+      .live-activity {
+        right: 10px;
+        left: 10px;
+        width: auto;
+      }
+    }
+
     /* Animations */
     @keyframes fadeIn {
       from { opacity: 0; }
@@ -1865,8 +1949,11 @@
           <label class="settings-input-label">Input</label>
           <textarea class="settings-input" id="relay-content" rows="4" placeholder="Paste content/context to control via relay..."></textarea>
 
-          <div style="font-size:12px;color:var(--fg-dim);margin-top:8px;" id="relay-hint">Builds a local-first control prompt with predefined provider artifact format.</div>
-          <button class="settings-btn" id="relay-build-btn" style="margin-top:12px;">Build Relay Artifact</button>
+          <div style="font-size:12px;color:var(--fg-dim);margin-top:8px;" id="relay-hint">Step 1: Build artifact. Step 2: send it in chat, or use "Build + Send".</div>
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="settings-btn" id="relay-build-btn" style="flex:1;">Build Relay Artifact</button>
+            <button class="settings-btn" id="relay-run-btn" style="flex:1;">Build + Send</button>
+          </div>
         </div>
       </div>
 
@@ -2023,6 +2110,18 @@
 
   <!-- Toast -->
   <div class="toast" id="toast"></div>
+
+  <!-- Live Activity -->
+  <div class="live-activity" id="live-activity" aria-live="polite">
+    <div class="live-activity-header">
+      <div>
+        <div class="live-activity-title" id="live-activity-title">Live Activity</div>
+        <div class="live-activity-status" id="live-activity-status">Idle</div>
+      </div>
+      <button class="live-activity-close" id="live-activity-close" aria-label="Close live activity">&times;</button>
+    </div>
+    <div class="live-activity-log" id="live-activity-log"></div>
+  </div>
 
   <!-- Landing page logic -->
   <script type="module">

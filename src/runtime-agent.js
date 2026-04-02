@@ -130,11 +130,46 @@ export class RuntimeAgent {
 
       function parseArgs(input) {
         const out = [];
-        const re = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|\\S+/g;
-        let m;
-        while ((m = re.exec(input)) !== null) {
-          out.push((m[1] || m[2] || m[0] || '').replace(/\\\\"/g, '"').replace(/\\\\'/g, "'"));
+        let cur = '';
+        let quote = '';
+
+        for (let i = 0; i < input.length; i++) {
+          const ch = input[i];
+
+          if (quote) {
+            if (ch === '\\\\' && i + 1 < input.length) {
+              cur += input[i + 1];
+              i++;
+              continue;
+            }
+            if (ch === quote) {
+              quote = '';
+              continue;
+            }
+            cur += ch;
+            continue;
+          }
+
+          if (ch === '"' || ch === "'") {
+            quote = ch;
+            continue;
+          }
+
+          if (/\s/.test(ch)) {
+            if (cur) {
+              out.push(cur);
+              cur = '';
+            }
+            continue;
+          }
+
+          cur += ch;
         }
+
+        if (cur) {
+          out.push(cur);
+        }
+
         return out;
       }
 

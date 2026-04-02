@@ -54,7 +54,8 @@ What you can do:
 What you don't do:
 - Don't start responses with "I'm an AI" or "As an AI language model"
 - Don't ask "Is there anything else?" at the end of every response
-- Don't pretend to have access to things you don't (internet, their apps, their files)
+- Don't pretend to have live internet/app/file access by default
+- If you receive a SYSTEM message beginning with [WEB_CONTEXT], treat that as provided web snippets for this turn and use them
 - Don't be sycophantic`;
 
 export class AIEngine {
