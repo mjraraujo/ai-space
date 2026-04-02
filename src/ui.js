@@ -43,6 +43,8 @@ export class UI {
     };
 
     this.currentStreamEl = null;
+    this.currentStreamCursor = null;
+    this.currentStreamRole = null;
     this._toastTimeout = null;
   }
 
@@ -88,7 +90,12 @@ export class UI {
 
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    bubble.textContent = content;
+
+    if (role === 'assistant' && !streaming) {
+      bubble.innerHTML = this._renderMarkdown(content);
+    } else {
+      bubble.textContent = content;
+    }
 
     messageDiv.appendChild(bubble);
     this.elements.messages.appendChild(messageDiv);
@@ -97,8 +104,19 @@ export class UI {
       this.elements.chatEmpty.classList.add('hidden');
     }
 
+    const chatSuggestions = document.getElementById('chat-suggestions');
+    if (chatSuggestions) {
+      chatSuggestions.classList.add('hidden');
+    }
+
     if (streaming) {
       this.currentStreamEl = bubble;
+      this.currentStreamRole = role;
+
+      const cursor = document.createElement('span');
+      cursor.className = 'streaming-cursor';
+      bubble.appendChild(cursor);
+      this.currentStreamCursor = cursor;
     }
 
     this._scrollToBottom();
@@ -112,15 +130,27 @@ export class UI {
   updateStreamingMessage(content) {
     if (this.currentStreamEl) {
       this.currentStreamEl.textContent = content;
+      if (this.currentStreamCursor) {
+        this.currentStreamEl.appendChild(this.currentStreamCursor);
+      }
       this._scrollToBottom();
     }
   }
 
   /**
-   * Finalize streaming message
+   * Finalize streaming message — apply markdown and remove cursor
    */
   finalizeStreamingMessage() {
+    if (this.currentStreamCursor) {
+      this.currentStreamCursor.remove();
+      this.currentStreamCursor = null;
+    }
+    if (this.currentStreamEl && this.currentStreamRole === 'assistant') {
+      const raw = this.currentStreamEl.textContent;
+      this.currentStreamEl.innerHTML = this._renderMarkdown(raw);
+    }
     this.currentStreamEl = null;
+    this.currentStreamRole = null;
   }
 
   /**
@@ -198,7 +228,8 @@ export class UI {
     const toast = this.elements.toast;
     if (!toast) return;
 
-    toast.textContent = text;
+    const icons = { error: '⚠ ', success: '✓ ', info: '' };
+    toast.textContent = (icons[type] || '') + text;
     toast.className = 'toast';
     if (type === 'error') {
       toast.classList.add('error');
@@ -260,6 +291,10 @@ export class UI {
     }
     if (this.elements.chatEmpty) {
       this.elements.chatEmpty.classList.remove('hidden');
+    }
+    const chatSuggestions = document.getElementById('chat-suggestions');
+    if (chatSuggestions) {
+      chatSuggestions.classList.remove('hidden');
     }
   }
 
@@ -549,5 +584,80 @@ export class UI {
     } else {
       return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
     }
+  }
+
+  /**
+   * Lightweight markdown renderer for assistant messages.
+   * Handles: fenced code blocks, inline code, bold, lists, headings, paragraphs.
+   * Safely escapes HTML before processing to prevent XSS.
+   * @param {string} text - Raw markdown text
+   * @returns {string} - Safe HTML string
+   */
+  _renderMarkdown(text) {
+    if (!text) return '';
+
+    const codeBlocks = [];
+
+    // 1. Extract fenced code blocks to protect them from further processing
+    let s = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      const i = codeBlocks.length;
+      const escaped = code.trimEnd()
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const langLabel = lang ? `<span class="msg-code-lang">${lang}</span>` : '';
+      codeBlocks.push(`<pre class="msg-code-block">${langLabel}<code>${escaped}</code></pre>`);
+      return `\x00BLOCK${i}\x00`;
+    });
+
+    // 2. Escape HTML in the remaining (non-code) text
+    s = s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    // 3. Inline code
+    s = s.replace(/`([^`\n]+)`/g, '<code class="msg-inline-code">$1</code>');
+
+    // 4. Bold (**text**)
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // 5. Process line-by-line for headings and lists
+    const lines = s.split('\n');
+    const out = [];
+    let inList = false;
+
+    for (const line of lines) {
+      const headMatch = line.match(/^(#{1,3}) (.+)/);
+      const listMatch = line.match(/^[-*] (.+)/);
+
+      if (headMatch) {
+        if (inList) { out.push('</ul>'); inList = false; }
+        const tag = `h${Math.min(headMatch[1].length, 6)}`;
+        out.push(`<${tag} class="msg-heading">${headMatch[2]}</${tag}>`);
+      } else if (listMatch) {
+        if (!inList) { out.push('<ul class="msg-list">'); inList = true; }
+        out.push(`<li>${listMatch[1]}</li>`);
+      } else {
+        if (inList) { out.push('</ul>'); inList = false; }
+        out.push(line);
+      }
+    }
+    if (inList) out.push('</ul>');
+
+    s = out.join('\n');
+
+    // 6. Paragraph breaks for double newlines; single newlines become <br>
+    s = s.replace(/\n{2,}/g, '</p><p>');
+    s = s.replace(/\n/g, '<br>');
+    s = `<p>${s}</p>`;
+
+    // 7. Unwrap paragraphs that only contain block-level elements
+    s = s.replace(/<p>(<(?:ul|pre|h[1-3])[^>]*>)/g, '$1');
+    s = s.replace(/(<\/(?:ul|pre|h[1-3])>)<\/p>/g, '$1');
+    s = s.replace(/<p>\s*<\/p>/g, '');
+
+    // 8. Restore code blocks
+    s = s.replace(/\x00BLOCK(\d+)\x00/g, (_, i) => codeBlocks[parseInt(i, 10)]);
+
+    return s;
   }
 }

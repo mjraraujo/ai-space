@@ -1101,6 +1101,21 @@ function wireEventListeners() {
   const cameraBtn = document.getElementById('camera-btn');
   if (cameraBtn) cameraBtn.addEventListener('click', handleCamera);
 
+  // Quick-start suggestion chips (empty state)
+  document.querySelectorAll('.chat-suggestion-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const prompt = chip.dataset.prompt;
+      if (!prompt) return;
+      const input = document.getElementById('chat-input');
+      if (input) {
+        input.value = prompt;
+        ui.autoResizeInput();
+        ui.setSendEnabled(true);
+        input.focus();
+      }
+    });
+  });
+
   // Remove attached image
   const removeImageBtn = document.getElementById('remove-image');
   if (removeImageBtn) removeImageBtn.addEventListener('click', () => {
@@ -2386,7 +2401,16 @@ async function handleMic() {
   } catch (err) {
     btn.classList.remove('active');
     input.placeholder = 'Message...';
-    ui.showNotification('Mic: ' + err.message, 'error');
+    const micErrMsg = err.message || '';
+    let micFriendly = 'Could not start the microphone.';
+    if (/denied|not allowed|permission/i.test(micErrMsg)) {
+      micFriendly = 'Microphone access denied. Check your browser settings.';
+    } else if (/not found|no device/i.test(micErrMsg)) {
+      micFriendly = 'No microphone found. Please connect one and try again.';
+    } else if (/busy|in use/i.test(micErrMsg)) {
+      micFriendly = 'Microphone is in use by another app.';
+    }
+    ui.showNotification(micFriendly, 'error');
   }
 }
 
@@ -2463,7 +2487,16 @@ async function handleConversation() {
   } catch (err) {
     btn.classList.remove('active');
     input.placeholder = 'Message...';
-    ui.showNotification('Mic: ' + err.message, 'error');
+    const micErrMsg = err.message || '';
+    let micFriendly = 'Could not start the microphone.';
+    if (/denied|not allowed|permission/i.test(micErrMsg)) {
+      micFriendly = 'Microphone access denied. Check your browser settings.';
+    } else if (/not found|no device/i.test(micErrMsg)) {
+      micFriendly = 'No microphone found. Please connect one and try again.';
+    } else if (/busy|in use/i.test(micErrMsg)) {
+      micFriendly = 'Microphone is in use by another app.';
+    }
+    ui.showNotification(micFriendly, 'error');
   }
 }
 
@@ -2518,15 +2551,29 @@ voice.onStateChange = (s) => {
   const input = document.getElementById('chat-input');
   if (!input) return;
 
+  // Clear all voice state classes from both buttons
+  const voiceStateClasses = ['listening', 'processing', 'speaking'];
+  [micBtn, convBtn].forEach((btn) => {
+    if (btn) voiceStateClasses.forEach((c) => btn.classList.remove(c));
+  });
+
   switch (s) {
     case 'listening':
       input.placeholder = voice.conversationMode ? 'Conversation mode...' : 'Listening...';
+      if (voice.conversationMode) {
+        if (convBtn) convBtn.classList.add('listening');
+      } else {
+        if (micBtn) micBtn.classList.add('listening');
+      }
       break;
     case 'processing':
       input.placeholder = 'Thinking...';
+      if (convBtn) convBtn.classList.add('processing');
+      if (micBtn) micBtn.classList.add('processing');
       break;
     case 'speaking':
       input.placeholder = 'Speaking...';
+      if (convBtn) convBtn.classList.add('speaking');
       break;
     default:
       if (!voice.conversationMode) {
