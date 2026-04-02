@@ -35,6 +35,11 @@ function copyAssetsPlugin() {
 }
 
 export default defineConfig({
+  test: {
+    environment: 'node',
+    globals: true,
+    include: ['src/__tests__/**/*.test.js']
+  },
   base: '/ai-space/',
   root: '.',
   build: {

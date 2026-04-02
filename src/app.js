@@ -12,6 +12,7 @@ import { Camera } from './camera.js';
 import { deviceAuthFlow, getAuthIssuer, getClientIdOverride, setClientIdOverride, clearClientIdOverride } from './codex-auth.js';
 import { RelayHub } from './relays.js';
 import { RuntimeAgent } from './runtime-agent.js';
+import { isWebLookupIntent, extractWebQuery, looksLikeLegacyRuntimeScript, parseModelSizeToBytes } from './utils.js';
 
 // State
 const state = {
@@ -110,33 +111,6 @@ function appendLiveActivityLog(line) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function isWebLookupIntent(text) {
-  return /\b(search|find|lookup|look up|web|internet|wikipedia|google)\b/i.test(String(text || ''));
-}
-
-function extractWebQuery(text) {
-  const raw = String(text || '').trim();
-  if (!raw) return '';
-
-  const patterns = [
-    /(?:search|find|lookup|look up)(?:\s+(?:on|in)\s+the\s+web)?\s+(?:about\s+)?(.+)/i,
-    /(?:about|on)\s+(.+)/i
-  ];
-
-  for (const pattern of patterns) {
-    const m = raw.match(pattern);
-    if (m && m[1]) {
-      return m[1].trim();
-    }
-  }
-
-  return raw;
-}
-
-function looksLikeLegacyRuntimeScript(script) {
-  const s = String(script || '');
-  return /tools\.|\bawait\b|\bconst\b|;/.test(s);
-}
 
 function detectRuntimePresetFromText(text) {
   const t = String(text || '').toLowerCase();
@@ -760,11 +734,14 @@ async function setupReadyStep() {
 
     // Start model download
     try {
-      await engine.init(null, (progress) => {
+      const selectedModel = document.getElementById('onboarding-model-picker')?.value || null;
+      await engine.init(selectedModel, (progress) => {
         const pct = Math.round((progress.progress || 0) * 100);
         ui.updateProgress(pct, progress.text || 'Downloading...');
       });
-      await auditLog('model_load', { model: engine.getStatus().modelId, success: true });
+      const loadedModelId = engine.getStatus().modelId;
+      await auditLog('model_load', { model: loadedModelId, success: true });
+      savePref('selected_model', loadedModelId);
       ui.updateProgress(100, 'Ready!');
     } catch (err) {
       console.error('Model download failed:', err);
@@ -1453,15 +1430,6 @@ function handleSend() {
   sendMessage(text);
 }
 
-function parseModelSizeToBytes(sizeLabel) {
-  if (!sizeLabel || typeof sizeLabel !== 'string') return 0;
-  const match = sizeLabel.trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(MB|GB)$/i);
-  if (!match) return 0;
-  const value = Number(match[1]);
-  const unit = match[2].toUpperCase();
-  const base = 1024 * 1024;
-  return unit === 'GB' ? value * base * 1024 : value * base;
-}
 
 async function checkModelDownloadCapacity(modelId) {
   const models = AIEngine.getModels();
@@ -1668,7 +1636,6 @@ async function sendMessage(text) {
   if (memoryReady) {
     try {
       await memory.saveChatHistory(state.conversationId, state.messages);
-      await memory.saveConversation(state.conversationId, state.messages);
       // Remember which conversation is active so we restore on reload
       await memory.savePreference('last_conversation_id', state.conversationId);
     } catch {}
@@ -1920,16 +1887,6 @@ async function handleDeleteConversation(id) {
 }
 
 /**
- * Start a new conversation
- */
-function handleNewChat() {
-  state.conversationId = null;
-  state.messages = [];
-  ui.clearMessages();
-  ui.showNotification('New conversation');
-}
-
-/**
  * Switch local model — downloads new model on demand
  */
 async function handleSwitchModel() {
@@ -2076,6 +2033,19 @@ async function handleSaveCloudConfig() {
   if (!apiKey) {
     ui.showNotification('Enter an API key', 'error');
     return;
+  }
+
+  if (provider === 'custom' && endpoint) {
+    try {
+      const parsed = new URL(endpoint);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        ui.showNotification('Endpoint must be an http:// or https:// URL', 'error');
+        return;
+      }
+    } catch {
+      ui.showNotification('Invalid endpoint URL', 'error');
+      return;
+    }
   }
 
   engine.setCloudConfig(endpoint, apiKey, model);
@@ -2409,29 +2379,10 @@ async function loadSidebarHistory() {
   if (!memoryReady) return;
   try {
     const convs = await memory.getConversations();
-    const list = document.getElementById('sidebar-list');
-    if (!list) return;
-    list.innerHTML = '';
-    for (const conv of convs) {
-      const item = document.createElement('div');
-      item.className = 'sidebar-item' + (conv.id === state.conversationId ? ' active' : '');
-      item.innerHTML = '<div class="sidebar-item-title">' + (conv.title || 'Untitled') + '</div><div class="sidebar-item-date">' + formatDate(conv.updatedAt || conv.createdAt) + '</div>';
-      item.addEventListener('click', () => loadConversationFromSidebar(conv.id));
-      list.appendChild(item);
-    }
+    ui.renderHistorySidebar(convs, state.conversationId, loadConversationFromSidebar);
   } catch {}
 }
 
-function formatDate(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  const now = new Date();
-  const diff = now - d;
-  if (diff < 60000) return 'Just now';
-  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
-  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
-  return d.toLocaleDateString();
-}
 
 async function loadConversationFromSidebar(id) {
   if (!memoryReady) return;

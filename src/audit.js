@@ -11,7 +11,8 @@ const AUDIT_TYPES = [
   'approval',
   'model_load',
   'voice_input',
-  'image_input'
+  'image_input',
+  'internet_consult'
 ];
 
 export class Audit {

@@ -8,7 +8,7 @@
 
 const DB_VERSION = 2;
 const STORES = ['conversations', 'preferences', 'audit_log', 'shared_content', 'chat_history'];
-const PBKDF2_ITERATIONS = 10000;
+const PBKDF2_ITERATIONS = 100000;
 
 export class Memory {
   constructor() {

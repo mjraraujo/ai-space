@@ -319,7 +319,7 @@ export class AIEngine {
   }
 
   /**
-   * Claude (Anthropic) inference using native Messages API.
+   * Claude (Anthropic) inference using native Messages API with SSE streaming.
    */
   async _chatAnthropic(messages, systemContent, onToken) {
     let url = this.cloudEndpoint;
@@ -345,7 +345,8 @@ export class AIEngine {
           max_tokens: 1024,
           temperature: 0.7,
           system: systemContent,
-          messages: anthropicMessages
+          messages: anthropicMessages,
+          stream: true
         })
       });
 
@@ -354,19 +355,42 @@ export class AIEngine {
         throw new Error(`Cloud API error (${response.status}): ${errorText}`);
       }
 
-      const parsed = await response.json();
-      const text = Array.isArray(parsed?.content)
-        ? parsed.content
-          .filter((item) => item?.type === 'text' && item?.text)
-          .map((item) => item.text)
-          .join('')
-        : '';
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = '';
+      let buffer = '';
 
-      if (onToken && text) {
-        onToken(text, text);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+
+          const data = trimmed.slice(6);
+          if (!data) continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+              const delta = parsed.delta.text || '';
+              if (delta) {
+                fullResponse += delta;
+                if (onToken) onToken(delta, fullResponse);
+              }
+            }
+          } catch {
+            // Skip malformed chunks
+          }
+        }
       }
 
-      return text;
+      return fullResponse;
     } catch (err) {
       if (err.message.startsWith('Cloud API error')) {
         throw err;

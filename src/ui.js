@@ -312,7 +312,7 @@ export class UI {
    * @param {Array} conversations - [{id, title, updatedAt}]
    * @param {string} activeId - Currently active conversation id
    */
-  renderHistorySidebar(conversations, activeId) {
+  renderHistorySidebar(conversations, activeId, onItemClick) {
     const list = this.elements.sidebarList;
     if (!list) return;
 
@@ -344,6 +344,11 @@ export class UI {
 
       item.appendChild(title);
       item.appendChild(date);
+
+      if (onItemClick) {
+        item.addEventListener('click', () => onItemClick(conv.id));
+      }
+
       list.appendChild(item);
     }
   }
