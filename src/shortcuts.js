@@ -90,6 +90,25 @@ const SKILLS = {
       'Add to Home Screen or use as a widget for quick access.'
     ]
   },
+  'quick-note': {
+    id: 'quick-note',
+    name: 'Quick Note',
+    description: 'Voice/text quick note saved locally',
+    icon: '🗒️',
+    sfIcon: 'note.text.badge.plus',
+    prompt: 'Capture this note and organize it into: note text, tags, and one follow-up suggestion:',
+    shortcutName: 'AI Space Quick Note',
+    steps: [
+      'Open the Shortcuts app on your iPhone/iPad.',
+      'Tap "+" to create a new shortcut.',
+      'Name it "AI Space Quick Note".',
+      'Add action: "Dictate Text" or "Ask for Input".',
+      'Add action: "Base64 Encode" the input.',
+      'Add action: "URL" and set it to:\n{APP_URL}?skill=quick-note&data={encoded}',
+      'Add action: "Open URLs".',
+      'Tap "Done" to save.'
+    ]
+  },
   'calendar-sync': {
     id: 'calendar-sync',
     name: 'Calendar Sync',
@@ -121,6 +140,32 @@ export class Shortcuts {
       : 'https://ai-space.app';
     // Clean trailing slashes
     this.appURL = this.appURL.replace(/\/+$/, '');
+  }
+
+  _decodeBase64Flexible(raw) {
+    if (!raw) return '';
+    let value = String(raw).trim();
+    // URL-safe base64 to standard base64
+    value = value.replace(/-/g, '+').replace(/_/g, '/');
+    while (value.length % 4 !== 0) {
+      value += '=';
+    }
+    const binary = atob(value);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      // Fallback for legacy payloads that were encoded as latin-1 text.
+      return binary;
+    }
+  }
+
+  _safeJsonParse(text) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -192,14 +237,28 @@ export class Shortcuts {
     if (!skill) return null;
 
     let input = '';
+    let payload = null;
     const dataParam = urlParams.get('data');
+    const payloadParam = urlParams.get('payload');
     const inputParam = urlParams.get('input');
     const timeParam = urlParams.get('time');
+    const titleParam = urlParams.get('title');
+    const urlParam = urlParams.get('url');
+    const sourceParam = urlParams.get('source');
+
+    if (payloadParam) {
+      try {
+        const decodedPayload = this._decodeBase64Flexible(payloadParam);
+        payload = this._safeJsonParse(decodedPayload);
+      } catch {
+        payload = this._safeJsonParse(payloadParam);
+      }
+    }
 
     if (dataParam) {
       // Try to decode base64 data
       try {
-        input = atob(dataParam);
+        input = this._decodeBase64Flexible(dataParam);
       } catch {
         // If not valid base64, use as-is
         input = dataParam;
@@ -210,6 +269,27 @@ export class Shortcuts {
       input = timeParam;
     }
 
+    if (!input && payload) {
+      if (typeof payload === 'string') {
+        input = payload;
+      } else if (payload.text) {
+        input = payload.text;
+      } else if (payload.content) {
+        input = payload.content;
+      } else {
+        input = JSON.stringify(payload);
+      }
+    }
+
+    if (titleParam || urlParam || sourceParam) {
+      payload = {
+        ...(payload || {}),
+        title: titleParam || payload?.title || '',
+        url: urlParam || payload?.url || '',
+        source: sourceParam || payload?.source || 'shortcut-url'
+      };
+    }
+
     return {
       skillId,
       skill: {
@@ -218,6 +298,7 @@ export class Shortcuts {
         prompt: skill.prompt
       },
       input,
+      payload,
       timestamp: Date.now()
     };
   }
@@ -229,6 +310,63 @@ export class Shortcuts {
    */
   buildPrompt(invocation) {
     if (!invocation) return null;
-    return `${invocation.skill.prompt}\n\n${invocation.input}`;
+    const payloadText = invocation.payload && typeof invocation.payload === 'object'
+      ? JSON.stringify(invocation.payload, null, 2)
+      : '';
+    const body = [invocation.input, payloadText].filter(Boolean).join('\n\n');
+    return `${invocation.skill.prompt}\n\n${body}`;
+  }
+
+  /**
+   * Process a skill invocation into actionable app behavior.
+   * @param {object} invocation
+   * @param {object} deps - {memory, memoryReady}
+   * @returns {Promise<{prompt: string|null, notification: string, suggestedActions: string[]}>}
+   */
+  async processInvocation(invocation, deps = {}) {
+    if (!invocation) {
+      return { prompt: null, notification: '', suggestedActions: [] };
+    }
+
+    const { memory, memoryReady } = deps;
+    const suggestedActions = [];
+    const lowerSkill = (invocation.skillId || '').toLowerCase();
+
+    if ((lowerSkill === 'quick-capture' || lowerSkill === 'quick-note') && memoryReady && memory) {
+      const noteText = (invocation.input || '').trim();
+      if (noteText) {
+        await memory.saveSharedContent({
+          id: 'note_' + Date.now(),
+          type: 'quick-note',
+          text: noteText,
+          source: 'ios-shortcuts',
+          createdAt: Date.now()
+        });
+      }
+      suggestedActions.push('Expand this note');
+      suggestedActions.push('Create TODO list');
+      return {
+        prompt: this.buildPrompt(invocation),
+        notification: 'Quick note captured locally.',
+        suggestedActions
+      };
+    }
+
+    if (lowerSkill === 'reply-drafter') {
+      suggestedActions.push('Make it more formal');
+      suggestedActions.push('Make it shorter');
+    } else if (lowerSkill === 'morning-briefing') {
+      suggestedActions.push('Create today plan');
+      suggestedActions.push('Top 3 priorities');
+    } else if (lowerSkill === 'calendar-sync') {
+      suggestedActions.push('Detect conflicts');
+      suggestedActions.push('Draft agenda');
+    }
+
+    return {
+      prompt: this.buildPrompt(invocation),
+      notification: `Shortcut received: ${invocation.skill.name}`,
+      suggestedActions
+    };
   }
 }

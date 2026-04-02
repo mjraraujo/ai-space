@@ -10,6 +10,8 @@ import { UI } from './ui.js';
 import { Voice } from './voice.js';
 import { Camera } from './camera.js';
 import { deviceAuthFlow, getAuthIssuer, getClientIdOverride, setClientIdOverride, clearClientIdOverride } from './codex-auth.js';
+import { RelayHub } from './relays.js';
+import { RuntimeAgent } from './runtime-agent.js';
 
 // State
 const state = {
@@ -18,7 +20,9 @@ const state = {
   conversationId: null,
   messages: [],
   isGenerating: false,
-  firstVisit: true
+  firstVisit: true,
+  runtimeMode: 'strict',
+  localInternetAssist: false
 };
 
 // Modules
@@ -26,12 +30,53 @@ const engine = new AIEngine();
 const memory = new Memory();
 const audit = new Audit();
 const shortcuts = new Shortcuts();
+const relays = new RelayHub();
+const runtimeAgent = new RuntimeAgent();
 const voice = new Voice();
 const camera = new Camera();
 let ui = null;
 let memoryReady = false;
 let pendingImage = null;
 let conversationTurnBusy = false;
+let pendingShortcutActions = [];
+let activeRuntimeJobId = null;
+let runtimeOutputLines = [];
+
+const MAX_RUNTIME_OUTPUT_LINES = 220;
+const MAX_RUNTIME_OUTPUT_LINE_LENGTH = 1200;
+
+async function fetchLocalInternetContext(query) {
+  const q = String(query || '').trim();
+  if (!q || !navigator.onLine || !state.localInternetAssist) return '';
+
+  const search = encodeURIComponent(q.slice(0, 180));
+  const url = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${search}&limit=3&namespace=0&format=json&origin=*`;
+
+  try {
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) return '';
+    const data = await res.json();
+    const titles = Array.isArray(data?.[1]) ? data[1] : [];
+    const descs = Array.isArray(data?.[2]) ? data[2] : [];
+    const links = Array.isArray(data?.[3]) ? data[3] : [];
+
+    const items = [];
+    for (let i = 0; i < Math.min(3, titles.length); i++) {
+      const title = titles[i] || 'Untitled';
+      const desc = descs[i] || '';
+      const link = links[i] || '';
+      items.push(`${i + 1}. ${title}${desc ? ' — ' + desc : ''}${link ? ' (' + link + ')' : ''}`);
+    }
+
+    if (items.length === 0) return '';
+    return [
+      'Live web context (use cautiously, may be incomplete):',
+      ...items
+    ].join('\n');
+  } catch {
+    return '';
+  }
+}
 
 /**
  * Initialize the application
@@ -94,6 +139,13 @@ function initMemoryInBackground() {
       }
       const visited = await memory.getPreference('visited');
       if (visited) state.firstVisit = false;
+
+      const runtimeMode = await memory.getPreference('runtime_mode');
+      if (runtimeMode === 'strict' || runtimeMode === 'trusted') {
+        state.runtimeMode = runtimeMode;
+      }
+      const localInternetAssist = await memory.getPreference('local_internet_assist');
+      state.localInternetAssist = !!localInternetAssist;
 
       // Load cloud config
       const cloudEndpoint = await memory.getPreference('cloud_endpoint');
@@ -693,6 +745,286 @@ function wireEventListeners() {
   // Cloud config save
   const saveCloudBtn = document.getElementById('save-cloud-config');
   if (saveCloudBtn) saveCloudBtn.addEventListener('click', handleSaveCloudConfig);
+
+  const relayType = document.getElementById('relay-type');
+  if (relayType) relayType.addEventListener('change', handleRelayTypeChange);
+
+  const relayBuild = document.getElementById('relay-build-btn');
+  if (relayBuild) relayBuild.addEventListener('click', handleBuildRelayArtifact);
+
+  const runtimePreset = document.getElementById('runtime-preset');
+  if (runtimePreset) runtimePreset.addEventListener('change', handleRuntimePresetChange);
+
+  const runtimeRun = document.getElementById('runtime-run-btn');
+  if (runtimeRun) runtimeRun.addEventListener('click', handleRunRuntimeScript);
+
+  const runtimeStop = document.getElementById('runtime-stop-btn');
+  if (runtimeStop) runtimeStop.addEventListener('click', handleStopRuntimeScript);
+
+  const runtimeModeEl = document.getElementById('runtime-mode');
+  if (runtimeModeEl) runtimeModeEl.addEventListener('change', handleRuntimeModeChange);
+
+  const localInternetAssistEl = document.getElementById('local-internet-assist');
+  if (localInternetAssistEl) localInternetAssistEl.addEventListener('change', handleLocalInternetAssistChange);
+}
+
+async function handleRuntimeModeChange() {
+  const el = document.getElementById('runtime-mode');
+  const hintEl = document.getElementById('runtime-hint');
+  if (!el) return;
+
+  state.runtimeMode = el.value === 'trusted' ? 'trusted' : 'strict';
+  if (hintEl) {
+    hintEl.textContent = state.runtimeMode === 'trusted'
+      ? 'Trusted mode enabled: executes script with higher local power. Use only your own scripts.'
+      : 'Strict mode enabled: DSL commands LOG, RUN, WAIT, NAVIGATE, RETURN, RETURNJSON.';
+  }
+
+  if (memoryReady) {
+    try {
+      await memory.savePreference('runtime_mode', state.runtimeMode);
+    } catch {}
+  }
+}
+
+async function handleLocalInternetAssistChange() {
+  const el = document.getElementById('local-internet-assist');
+  if (!el) return;
+
+  state.localInternetAssist = !!el.checked;
+  if (memoryReady) {
+    try {
+      await memory.savePreference('local_internet_assist', state.localInternetAssist);
+    } catch {}
+  }
+  ui.showNotification(state.localInternetAssist ? 'Local internet assist enabled' : 'Local internet assist disabled', 'success');
+}
+
+function appendRuntimeOutput(line) {
+  const outputEl = document.getElementById('runtime-output');
+  if (!outputEl) return;
+  const stamp = new Date().toLocaleTimeString();
+  const normalized = String(line ?? '').slice(0, MAX_RUNTIME_OUTPUT_LINE_LENGTH);
+  const next = `[${stamp}] ${normalized}`;
+  runtimeOutputLines.push(next);
+  if (runtimeOutputLines.length > MAX_RUNTIME_OUTPUT_LINES) {
+    runtimeOutputLines = runtimeOutputLines.slice(-MAX_RUNTIME_OUTPUT_LINES);
+  }
+  outputEl.textContent = runtimeOutputLines.join('\n');
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+function setRuntimeButtons(isRunning) {
+  const runBtn = document.getElementById('runtime-run-btn');
+  const stopBtn = document.getElementById('runtime-stop-btn');
+  if (runBtn) runBtn.disabled = isRunning;
+  if (stopBtn) stopBtn.disabled = !isRunning;
+}
+
+function populateRuntimeControls() {
+  const presetEl = document.getElementById('runtime-preset');
+  if (!presetEl) return;
+
+  if (presetEl.options.length === 0) {
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = 'Custom Script';
+    presetEl.appendChild(blank);
+
+    RuntimeAgent.getPresets().forEach((preset) => {
+      const opt = document.createElement('option');
+      opt.value = preset.id;
+      opt.textContent = preset.name;
+      presetEl.appendChild(opt);
+    });
+  }
+}
+
+function handleRuntimePresetChange() {
+  const presetEl = document.getElementById('runtime-preset');
+  const scriptEl = document.getElementById('runtime-script');
+  const hintEl = document.getElementById('runtime-hint');
+  if (!presetEl || !scriptEl) return;
+
+  const presetId = presetEl.value;
+  const preset = RuntimeAgent.getPresets().find((p) => p.id === presetId);
+
+  if (!preset) {
+    if (hintEl) hintEl.textContent = 'Write DSL commands: LOG, RUN, WAIT, NAVIGATE, RETURN or RETURNJSON.';
+    return;
+  }
+
+  scriptEl.value = preset.script;
+  if (hintEl) hintEl.textContent = `Preset loaded: ${preset.name}`;
+}
+
+async function handleRunRuntimeScript() {
+  if (activeRuntimeJobId) {
+    ui.showNotification('A runtime task is already running', 'error');
+    return;
+  }
+
+  const scriptEl = document.getElementById('runtime-script');
+  const hintEl = document.getElementById('runtime-hint');
+  const presetEl = document.getElementById('runtime-preset');
+
+  if (!scriptEl) return;
+  const script = scriptEl.value?.trim() || '';
+  if (!script) {
+    ui.showNotification('Add a script first', 'error');
+    return;
+  }
+
+  appendRuntimeOutput('Starting background runtime task...');
+  appendRuntimeOutput('Runtime mode: ' + state.runtimeMode);
+  setRuntimeButtons(true);
+
+  activeRuntimeJobId = runtimeAgent.run(script, {
+    onLog: ({ text }) => appendRuntimeOutput(text),
+    onStatus: ({ status, url }) => {
+      if (status === 'navigate' && url) {
+        appendRuntimeOutput('Navigate requested: ' + url);
+        try {
+          const tab = window.open(url, '_blank', 'noopener');
+          if (!tab) {
+            appendRuntimeOutput('Popup blocked by browser. Open this URL manually: ' + url);
+            if (hintEl) hintEl.textContent = 'Popup blocked. Copy URL from logs and open manually.';
+            ui.showNotification('Popup blocked. Open URL manually from logs.', 'error');
+          }
+        } catch {}
+      } else if (status === 'cancelled') {
+        appendRuntimeOutput('Task cancelled');
+      }
+    },
+    onDone: async ({ result, durationMs }) => {
+      appendRuntimeOutput('Task complete in ' + durationMs + 'ms');
+      if (result !== undefined) {
+        appendRuntimeOutput('Result: ' + JSON.stringify(result));
+      }
+      setRuntimeButtons(false);
+      activeRuntimeJobId = null;
+      if (hintEl) hintEl.textContent = 'Background runtime idle.';
+      ui.showNotification('Background task finished', 'success');
+
+      if (memoryReady && presetEl) {
+        try {
+          await memory.savePreference('runtime_preset', presetEl.value || '');
+          await memory.savePreference('runtime_script', script);
+        } catch {}
+      }
+    },
+    onError: ({ error }) => {
+      appendRuntimeOutput('Error: ' + error);
+      setRuntimeButtons(false);
+      activeRuntimeJobId = null;
+      if (hintEl) hintEl.textContent = 'Background runtime failed. Fix script and retry.';
+      ui.showNotification('Background task failed', 'error');
+    }
+  }, {
+    runtimeMode: state.runtimeMode
+  });
+
+  if (hintEl) hintEl.textContent = state.runtimeMode === 'trusted'
+    ? 'Trusted runtime running...'
+    : 'Strict runtime running...';
+}
+
+function handleStopRuntimeScript() {
+  if (!activeRuntimeJobId) return;
+
+  const hintEl = document.getElementById('runtime-hint');
+  const cancelled = runtimeAgent.cancel(activeRuntimeJobId);
+  activeRuntimeJobId = null;
+  setRuntimeButtons(false);
+  if (cancelled) {
+    appendRuntimeOutput('Stop requested by user');
+    if (hintEl) hintEl.textContent = 'Background runtime stopped.';
+    ui.showNotification('Background task stopped', 'success');
+  }
+}
+
+function handleRelayTypeChange() {
+  const relayTypeEl = document.getElementById('relay-type');
+  const relayActionEl = document.getElementById('relay-action');
+  if (!relayTypeEl || !relayActionEl) return;
+
+  const relayId = relayTypeEl.value || 'shortcuts';
+  const actions = relays.getActions(relayId);
+
+  relayActionEl.innerHTML = '';
+  actions.forEach((a) => {
+    const opt = document.createElement('option');
+    opt.value = a.id;
+    opt.textContent = a.label;
+    relayActionEl.appendChild(opt);
+  });
+}
+
+function populateRelayControls() {
+  const relayTypeEl = document.getElementById('relay-type');
+  const relayActionEl = document.getElementById('relay-action');
+  const relayProviderEl = document.getElementById('relay-provider');
+
+  if (!relayTypeEl || !relayActionEl || !relayProviderEl) return;
+
+  if (relayTypeEl.options.length === 0) {
+    relays.getRelays().forEach((r) => {
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = r.name;
+      relayTypeEl.appendChild(opt);
+    });
+  }
+
+  if (relayProviderEl.options.length === 0) {
+    relays.getProviders().forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      relayProviderEl.appendChild(opt);
+    });
+  }
+
+  handleRelayTypeChange();
+}
+
+async function handleBuildRelayArtifact() {
+  const relayTypeEl = document.getElementById('relay-type');
+  const relayActionEl = document.getElementById('relay-action');
+  const relayProviderEl = document.getElementById('relay-provider');
+  const relayContentEl = document.getElementById('relay-content');
+  const hintEl = document.getElementById('relay-hint');
+  const inputEl = document.getElementById('chat-input');
+
+  if (!relayTypeEl || !relayActionEl || !relayProviderEl || !relayContentEl || !inputEl) {
+    ui.showNotification('Relay controls not available', 'error');
+    return;
+  }
+
+  const relayId = relayTypeEl.value || 'shortcuts';
+  const actionId = relayActionEl.value || 'summarize';
+  const providerId = relayProviderEl.value || 'local';
+  const content = relayContentEl.value || '';
+
+  const prompt = relays.buildArtifactPrompt({ relayId, actionId, providerId, content });
+  inputEl.value = prompt;
+  ui.autoResizeInput();
+  ui.setSendEnabled(true);
+
+  if (hintEl) {
+    hintEl.textContent = 'Artifact generated. Review/edit in chat input, then send.';
+  }
+
+  if (memoryReady) {
+    try {
+      await memory.savePreference('relay_type', relayId);
+      await memory.savePreference('relay_action', actionId);
+      await memory.savePreference('relay_provider', providerId);
+    } catch {}
+  }
+
+  transition('chat');
+  ui.showNotification('Relay artifact ready in chat input', 'success');
 }
 
 function setupConnectivityListeners() {
@@ -837,14 +1169,38 @@ async function sendMessage(text) {
       ui.showTyping(false);
       ui.renderMessage('assistant', '', true);
 
+      const modelMessages = [...state.messages];
+      if (state.localInternetAssist && navigator.onLine) {
+        const liveContext = await fetchLocalInternetContext(text);
+        if (liveContext) {
+          modelMessages.push({
+            role: 'system',
+            content: liveContext
+          });
+          appendRuntimeOutput('Local internet context attached to current request.');
+          await auditLog('internet_consult', { source: 'wikipedia-opensearch', queryLength: text.length });
+        }
+      }
+
       let fullResponse = '';
-      await engine.chat(state.messages, (token, accumulated) => {
+      await engine.chat(modelMessages, (token, accumulated) => {
         fullResponse = accumulated;
         ui.updateStreamingMessage(accumulated);
       });
 
       ui.finalizeStreamingMessage();
       state.messages.push({ role: 'assistant', content: fullResponse });
+      if (pendingShortcutActions.length > 0) {
+        const actions = [...pendingShortcutActions];
+        pendingShortcutActions = [];
+        ui.addActionChips(actions, (actionText) => {
+          const inputEl = document.getElementById('chat-input');
+          if (!inputEl) return;
+          inputEl.value = actionText;
+          ui.autoResizeInput();
+          ui.setSendEnabled(true);
+        });
+      }
       await auditLog('suggestion', { model: engineStatus.modelId, responseLength: fullResponse.length });
     } catch (err) {
       ui.showTyping(false);
@@ -869,6 +1225,17 @@ async function sendMessage(text) {
 
       ui.finalizeStreamingMessage();
       state.messages.push({ role: 'assistant', content: fullResponse });
+      if (pendingShortcutActions.length > 0) {
+        const actions = [...pendingShortcutActions];
+        pendingShortcutActions = [];
+        ui.addActionChips(actions, (actionText) => {
+          const inputEl = document.getElementById('chat-input');
+          if (!inputEl) return;
+          inputEl.value = actionText;
+          ui.autoResizeInput();
+          ui.setSendEnabled(true);
+        });
+      }
       await auditLog('suggestion', { model: engine.cloudModel, responseLength: fullResponse.length, cloud: true });
     } catch (err) {
       ui.showTyping(false);
@@ -937,6 +1304,8 @@ async function setMode(mode) {
  */
 async function updateSettingsView() {
   ui.updateModeSelector(state.mode);
+  populateRelayControls();
+  populateRuntimeControls();
 
   const engineStatus = engine.getStatus();
   const modelName = engineStatus.modelInfo
@@ -1019,6 +1388,54 @@ async function updateSettingsView() {
   const clientIdInput = document.getElementById('chatgpt-client-id');
   if (clientIdInput) {
     clientIdInput.value = getClientIdOverride();
+  }
+
+  if (memoryReady) {
+    try {
+      const relayType = await memory.getPreference('relay_type');
+      const relayAction = await memory.getPreference('relay_action');
+      const relayProvider = await memory.getPreference('relay_provider');
+      const runtimePreset = await memory.getPreference('runtime_preset');
+      const runtimeScript = await memory.getPreference('runtime_script');
+      const runtimeMode = await memory.getPreference('runtime_mode');
+      const localInternetAssist = await memory.getPreference('local_internet_assist');
+
+      const relayTypeEl = document.getElementById('relay-type');
+      const relayActionEl = document.getElementById('relay-action');
+      const relayProviderEl = document.getElementById('relay-provider');
+
+      if (relayType && relayTypeEl) {
+        relayTypeEl.value = relayType;
+        handleRelayTypeChange();
+      }
+      if (relayAction && relayActionEl) {
+        relayActionEl.value = relayAction;
+      }
+      if (relayProvider && relayProviderEl) {
+        relayProviderEl.value = relayProvider;
+      }
+
+      const runtimePresetEl = document.getElementById('runtime-preset');
+      const runtimeScriptEl = document.getElementById('runtime-script');
+      const runtimeModeEl = document.getElementById('runtime-mode');
+      const localInternetAssistEl = document.getElementById('local-internet-assist');
+      if (runtimePresetEl && runtimePreset !== null && runtimePreset !== undefined) {
+        runtimePresetEl.value = runtimePreset;
+      }
+      if (runtimeScriptEl && runtimeScript) {
+        runtimeScriptEl.value = runtimeScript;
+      } else if (runtimePresetEl && runtimePresetEl.value) {
+        handleRuntimePresetChange();
+      }
+      if (runtimeModeEl && (runtimeMode === 'strict' || runtimeMode === 'trusted')) {
+        runtimeModeEl.value = runtimeMode;
+        state.runtimeMode = runtimeMode;
+      }
+      if (localInternetAssistEl) {
+        state.localInternetAssist = !!localInternetAssist;
+        localInternetAssistEl.checked = state.localInternetAssist;
+      }
+    } catch {}
   }
 }
 
@@ -1375,17 +1792,33 @@ async function handleShareTarget(urlParams) {
 /**
  * Handle incoming shortcut data from URL params
  */
-function handleIncomingShortcut() {
+async function handleIncomingShortcut() {
   const urlParams = new URLSearchParams(window.location.search);
   const invocation = shortcuts.parseIncoming(urlParams);
   if (invocation) {
-    const prompt = shortcuts.buildPrompt(invocation);
+    let result = null;
+    try {
+      result = await shortcuts.processInvocation(invocation, {
+        memory,
+        memoryReady
+      });
+      if (result?.notification) {
+        ui?.showNotification(result.notification, 'success');
+      }
+      if (result?.suggestedActions && result.suggestedActions.length > 0) {
+        pendingShortcutActions = result.suggestedActions;
+      }
+    } catch (err) {
+      ui?.showNotification('Shortcut processing error: ' + err.message, 'error');
+    }
+
+    const prompt = result?.prompt || shortcuts.buildPrompt(invocation);
     if (prompt) {
-      // Wait for app to be ready, then send
       setTimeout(() => {
         sendMessage(prompt);
-      }, 1500);
+      }, 700);
     }
+
     // Clean URL
     if (window.history.replaceState) {
       window.history.replaceState({}, document.title, window.location.pathname);

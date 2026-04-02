@@ -1851,6 +1851,62 @@
       </div>
 
       <div class="settings-section">
+        <div class="settings-section-title">Relay Control</div>
+        <div class="settings-card" style="padding:16px;">
+          <label class="settings-input-label">Relay</label>
+          <select class="settings-input" id="relay-type" style="appearance:auto;-webkit-appearance:auto;"></select>
+
+          <label class="settings-input-label">Action</label>
+          <select class="settings-input" id="relay-action" style="appearance:auto;-webkit-appearance:auto;"></select>
+
+          <label class="settings-input-label">Artifact Preset</label>
+          <select class="settings-input" id="relay-provider" style="appearance:auto;-webkit-appearance:auto;"></select>
+
+          <label class="settings-input-label">Input</label>
+          <textarea class="settings-input" id="relay-content" rows="4" placeholder="Paste content/context to control via relay..."></textarea>
+
+          <div style="font-size:12px;color:var(--fg-dim);margin-top:8px;" id="relay-hint">Builds a local-first control prompt with predefined provider artifact format.</div>
+          <button class="settings-btn" id="relay-build-btn" style="margin-top:12px;">Build Relay Artifact</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Background Runtime (Beta)</div>
+        <div class="settings-card" style="padding:16px;">
+          <label class="settings-input-label">Runtime Power</label>
+          <select class="settings-input" id="runtime-mode" style="appearance:auto;-webkit-appearance:auto;">
+            <option value="strict">Strict (recommended)</option>
+            <option value="trusted">Trusted (more local power)</option>
+          </select>
+
+          <label class="settings-input-label">Preset</label>
+          <select class="settings-input" id="runtime-preset" style="appearance:auto;-webkit-appearance:auto;"></select>
+
+          <label class="settings-input-label">Script</label>
+          <textarea class="settings-input" id="runtime-script" rows="8" placeholder="Use DSL commands: LOG text, RUN fetch https://..., RUN json https://... -> api, NAVIGATE https://..., WAIT 1500, RETURNJSON {&quot;ok&quot;:true}"></textarea>
+
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="settings-btn" id="runtime-run-btn" style="flex:1;">Run In Background</button>
+            <button class="settings-btn" id="runtime-stop-btn" style="flex:1;" disabled>Stop</button>
+          </div>
+
+          <div id="runtime-hint" style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.4;">Local-first mini terminal in a Web Worker. DSL commands: LOG, RUN, WAIT, NAVIGATE, RETURN, RETURNJSON. Use {{var.path}} interpolation.</div>
+          <pre id="runtime-output" style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;max-height:180px;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:1.45;"></pre>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Local Internet Assist</div>
+        <div class="settings-card" style="padding:16px;">
+          <label style="display:flex;align-items:center;gap:10px;font-size:14px;color:var(--fg-main);">
+            <input type="checkbox" id="local-internet-assist">
+            Let local model consult internet context when online
+          </label>
+          <div style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.4;">Adds lightweight live context (Wikipedia search) to local responses. Stays optional and local-first.</div>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <div class="settings-section-title">Cloud API</div>
         <div class="settings-card" style="padding: 16px;">
           <label class="settings-input-label">Provider</label>

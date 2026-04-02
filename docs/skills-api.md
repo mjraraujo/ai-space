@@ -4,6 +4,35 @@
 
 Skills are automations that connect AI Space to iOS Shortcuts and other automation platforms. Each skill defines a prompt template and input handling.
 
+## Background Runtime Capability
+
+AI Space now includes a local-first background runtime (beta) that runs in a Web Worker as a mini virtual terminal.
+
+- Location: Settings -> Background Runtime (Beta)
+- Execution model: non-blocking background job with live logs
+- Script model: restricted DSL commands (no arbitrary JavaScript execution)
+- Runtime power levels:
+  - `Strict`: restricted DSL interpreter (default)
+  - `Trusted`: executes script with higher local power for advanced users
+- DSL commands:
+  - `LOG <text>`
+  - `RUN <terminal-command> [-> var]` where terminal commands are: `help`, `now`, `echo`, `wait`, `fetch`, `json`
+  - `WAIT <ms>`
+  - `NAVIGATE <url>`
+  - `RETURN <text>` / `RETURNJSON <json>`
+  - Variable interpolation with `{{var.path}}`
+- Presets: health check, relay artifact builder, and navigate flow
+
+This runtime is browser-compiled and sandboxed to web APIs, and does not execute host shell commands directly. Arbitrary JavaScript is blocked in `Strict` mode and allowed only in `Trusted` mode.
+
+## Local Internet Assist
+
+The local model can optionally consult internet context when online:
+
+- Setting: `Local Internet Assist`
+- Behavior: fetches lightweight web context (Wikipedia OpenSearch) and injects it into the local request context
+- Policy: still local-first and optional (no cloud API key required)
+
 ## Skill Manifest
 
 Each skill is defined with the following structure:
@@ -30,7 +59,8 @@ Each skill is defined with the following structure:
 | `morning-briefing` | Morning Briefing | Daily briefing and priorities |
 | `reply-drafter` | Reply Drafter | Draft a reply to a message |
 | `quick-capture` | Quick Capture | Capture a note or thought |
-| `email-summary` | Email Summary | Summarize and extract action items from email |
+| `quick-note` | Quick Note | Voice/text quick note saved locally |
+| `calendar-sync` | Calendar Sync | Summarize upcoming events and conflicts |
 
 ## Protocol
 
