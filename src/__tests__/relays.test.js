@@ -74,11 +74,12 @@ describe('RelayHub', () => {
       expect(ids).not.toContain('web_extract');
     });
 
-    it('browser relay supports summarize, draft_reply, web_extract', () => {
+    it('browser relay supports summarize, draft_reply, web_extract, workflow_plan', () => {
       const ids = hub.getActions('browser').map(a => a.id);
       expect(ids).toContain('summarize');
       expect(ids).toContain('draft_reply');
       expect(ids).toContain('web_extract');
+      expect(ids).toContain('workflow_plan');
     });
 
     it('browser relay does NOT support morning_briefing or create_reminder', () => {
@@ -87,11 +88,12 @@ describe('RelayHub', () => {
       expect(ids).not.toContain('create_reminder');
     });
 
-    it('device relay supports summarize, draft_reply, morning_briefing, create_reminder', () => {
+    it('device relay supports summarize, draft_reply, morning_briefing, create_reminder, workflow_plan', () => {
       const ids = hub.getActions('device').map(a => a.id);
       expect(ids).toContain('summarize');
       expect(ids).toContain('morning_briefing');
       expect(ids).toContain('create_reminder');
+      expect(ids).toContain('workflow_plan');
     });
 
     it('device relay does NOT support web_extract', () => {
@@ -259,6 +261,18 @@ describe('RelayHub', () => {
       });
       expect(prompt).not.toContain('artifact-style response');
       expect(prompt).toContain('RelayCommandJSON');
+    });
+
+    it('workflow_plan asks for approval checkpoints and success criteria', () => {
+      const prompt = hub.buildArtifactPrompt({
+        relayId: 'device',
+        actionId: 'workflow_plan',
+        providerId: 'claude',
+        content: 'Plan a trip and create a reusable runbook'
+      });
+      expect(prompt).toContain('ApprovalCheckpoints');
+      expect(prompt).toContain('SuccessCriteria');
+      expect(prompt).toContain('workflow_plan');
     });
   });
 });

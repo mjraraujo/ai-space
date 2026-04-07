@@ -9,6 +9,11 @@
  * The PWA listens for incoming data via URL params: ?skill=ID&data=BASE64
  */
 
+import { SkillStudio } from './skill-studio.js';
+
+const skillStudio = new SkillStudio();
+const workflowStudio = skillStudio.getBuiltInDefinition();
+
 const SKILLS = {
   'summarize-clipboard': {
     id: 'summarize-clipboard',
@@ -130,6 +135,29 @@ const SKILLS = {
       'Add action: "Open URLs".',
       'Tap "Done" to save.'
     ]
+  },
+  'workflow-studio': {
+    id: workflowStudio.id,
+    name: workflowStudio.name,
+    description: workflowStudio.description,
+    icon: workflowStudio.icon,
+    sfIcon: workflowStudio.sfIcon,
+    prompt: workflowStudio.prompt,
+    shortcutName: 'AI Space Workflow Studio',
+    whenToUse: workflowStudio.whenToUse,
+    argumentHint: workflowStudio.argumentHint,
+    goal: 'Turn a complex routine into a reusable, approval-aware local skill.',
+    suggestedActions: workflowStudio.suggestedActions,
+    steps: [
+      'Open the Shortcuts app on your iPhone/iPad.',
+      'Tap "+" to create a new shortcut.',
+      'Name it "AI Space Workflow Studio".',
+      'Add action: "Ask for Input" and prompt for the workflow you want AI Space to turn into a skill.',
+      'Add action: "Base64 Encode" the input.',
+      'Add action: "URL" and set it to:\n{APP_URL}?skill=workflow-studio&data={encoded}',
+      'Add action: "Open URLs".',
+      'Tap "Done" to save. Running it will open AI Space with a ready-to-review workflow manifest prompt.'
+    ]
   }
 };
 
@@ -179,6 +207,31 @@ export class Shortcuts {
       description: skill.description,
       icon: skill.icon
     }));
+  }
+
+  /**
+   * Return the safe manifest metadata for a skill.
+   * Inspired by bundled skill registries: expose when-to-use and argument hints
+   * without leaking internal implementation details.
+   * @param {string} skillId
+   * @returns {object}
+   */
+  getSkillManifest(skillId) {
+    const skill = SKILLS[skillId];
+    if (!skill) {
+      throw new Error(`Unknown skill: ${skillId}`);
+    }
+
+    return {
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      whenToUse: skill.whenToUse || '',
+      argumentHint: skill.argumentHint || '',
+      goal: skill.goal || '',
+      suggestedActions: Array.isArray(skill.suggestedActions) ? [...skill.suggestedActions] : [],
+      steps: Array.isArray(skill.steps) ? [...skill.steps] : []
+    };
   }
 
   /**
@@ -295,7 +348,11 @@ export class Shortcuts {
       skill: {
         id: skill.id,
         name: skill.name,
-        prompt: skill.prompt
+        prompt: skill.prompt,
+        whenToUse: skill.whenToUse || '',
+        argumentHint: skill.argumentHint || '',
+        goal: skill.goal || '',
+        suggestedActions: Array.isArray(skill.suggestedActions) ? [...skill.suggestedActions] : []
       },
       input,
       payload,
@@ -313,8 +370,14 @@ export class Shortcuts {
     const payloadText = invocation.payload && typeof invocation.payload === 'object'
       ? JSON.stringify(invocation.payload, null, 2)
       : '';
+    const metadata = [
+      invocation.skill?.whenToUse ? `Use when: ${invocation.skill.whenToUse}` : '',
+      invocation.skill?.argumentHint ? `Argument hint: ${invocation.skill.argumentHint}` : '',
+      invocation.skill?.goal ? `Goal: ${invocation.skill.goal}` : ''
+    ].filter(Boolean).join('\n');
     const body = [invocation.input, payloadText].filter(Boolean).join('\n\n');
-    return `${invocation.skill.prompt}\n\n${body}`;
+    const header = [invocation.skill.prompt, metadata].filter(Boolean).join('\n\n');
+    return `${header}\n\n${body}`.trim();
   }
 
   /**
@@ -329,7 +392,9 @@ export class Shortcuts {
     }
 
     const { memory, memoryReady } = deps;
-    const suggestedActions = [];
+    const suggestedActions = Array.isArray(invocation.skill?.suggestedActions)
+      ? [...invocation.skill.suggestedActions]
+      : [];
     const lowerSkill = (invocation.skillId || '').toLowerCase();
 
     if ((lowerSkill === 'quick-capture' || lowerSkill === 'quick-note') && memoryReady && memory) {
@@ -348,7 +413,16 @@ export class Shortcuts {
       return {
         prompt: this.buildPrompt(invocation),
         notification: 'Quick note captured locally.',
-        suggestedActions
+        suggestedActions: Array.from(new Set(suggestedActions))
+      };
+    }
+
+    if (lowerSkill === 'workflow-studio') {
+      suggestedActions.push('Run in local mode');
+      return {
+        prompt: this.buildPrompt(invocation),
+        notification: 'Workflow Studio is ready — review the draft and save it as a local skill.',
+        suggestedActions: Array.from(new Set(suggestedActions))
       };
     }
 
@@ -366,7 +440,7 @@ export class Shortcuts {
     return {
       prompt: this.buildPrompt(invocation),
       notification: `Shortcut received: ${invocation.skill.name}`,
-      suggestedActions
+      suggestedActions: Array.from(new Set(suggestedActions))
     };
   }
 }

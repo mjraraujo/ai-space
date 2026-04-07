@@ -51,6 +51,12 @@ const ACTIONS = {
     label: 'Create reminder plan',
     relays: ['shortcuts', 'device'],
     intent: 'Generate reminder action plan with title, due date, and notes.'
+  },
+  workflow_plan: {
+    id: 'workflow_plan',
+    label: 'Workflow plan',
+    relays: ['shortcuts', 'browser', 'device'],
+    intent: 'Turn a complex task into a multi-step, approval-aware runbook with relay-safe actions.'
   }
 };
 
@@ -113,6 +119,23 @@ export class RelayHub {
     const providerHeader = provider.id === 'claude'
       ? 'Format output as an artifact-style response with sections: Summary, Plan, RelayCommandJSON.'
       : 'Format output with sections: Summary, Plan, RelayCommandJSON.';
+    const workflowInstructions = action.id === 'workflow_plan'
+      ? 'Also include sections named Goal, WorkflowSteps, ApprovalCheckpoints, and SuccessCriteria so the user can review the runbook before acting.'
+      : '';
+    const schema = action.id === 'workflow_plan'
+      ? {
+          relay: 'string',
+          action: 'workflow_plan',
+          content: 'string',
+          createdAt: 'ISO8601',
+          plan: {
+            goal: 'string',
+            steps: [{ title: 'string', successCriteria: 'string' }],
+            approvals: ['string']
+          },
+          constraints: { localFirst: true, cloudOptional: true, requireConfirmationForRisky: true }
+        }
+      : { relay: 'string', action: 'string', content: 'string', createdAt: 'ISO8601', constraints: { localFirst: true, cloudOptional: true, requireConfirmationForRisky: true } };
 
     return [
       `System constraints: local-first, cloud optional.`,
@@ -120,11 +143,12 @@ export class RelayHub {
       `Action intent: ${action.intent}`,
       `Provider preset: ${provider.name}. ${provider.style}`,
       providerHeader,
+      workflowInstructions,
       'Return a valid JSON block under RelayCommandJSON matching this schema:',
-      JSON.stringify({ relay: 'string', action: 'string', content: 'string', createdAt: 'ISO8601', constraints: { localFirst: true, cloudOptional: true, requireConfirmationForRisky: true } }, null, 2),
+      JSON.stringify(schema, null, 2),
       '',
       'Input payload:',
       JSON.stringify(envelope, null, 2)
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 }

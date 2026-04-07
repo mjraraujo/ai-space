@@ -36,8 +36,8 @@ describe('Shortcuts', () => {
   // ─── getSkills ─────────────────────────────────────────────────────────────
 
   describe('getSkills()', () => {
-    it('returns 6 skills', () => {
-      expect(shortcuts.getSkills()).toHaveLength(6);
+    it('returns 7 skills', () => {
+      expect(shortcuts.getSkills()).toHaveLength(7);
     });
 
     it('includes all expected skill IDs', () => {
@@ -48,6 +48,7 @@ describe('Shortcuts', () => {
       expect(ids).toContain('quick-capture');
       expect(ids).toContain('quick-note');
       expect(ids).toContain('calendar-sync');
+      expect(ids).toContain('workflow-studio');
     });
 
     it('each skill has id, name, description, icon', () => {
@@ -64,6 +65,16 @@ describe('Shortcuts', () => {
         expect(skill).not.toHaveProperty('prompt');
         expect(skill).not.toHaveProperty('steps');
       }
+    });
+  });
+
+  describe('getSkillManifest()', () => {
+    it('returns metadata for workflow-studio without exposing internal prompt steps twice', () => {
+      const manifest = shortcuts.getSkillManifest('workflow-studio');
+      expect(manifest.name).toBe('Workflow Studio');
+      expect(manifest.whenToUse).toContain('Use when');
+      expect(manifest.argumentHint).toContain('task');
+      expect(Array.isArray(manifest.suggestedActions)).toBe(true);
     });
   });
 
@@ -319,6 +330,16 @@ describe('Shortcuts', () => {
       const invocation = shortcuts.parseIncoming(params);
       const result = await shortcuts.processInvocation(invocation, {});
       expect(result.prompt).toContain('article text here');
+    });
+
+    it('returns workflow suggestions for workflow-studio', async () => {
+      const params = new URLSearchParams(`skill=workflow-studio&data=${b64('Plan my weekly review')}`);
+      const invocation = shortcuts.parseIncoming(params);
+      const result = await shortcuts.processInvocation(invocation, {});
+
+      expect(result.notification).toContain('Workflow Studio');
+      expect(result.suggestedActions).toContain('Save as local skill');
+      expect(result.prompt).toContain('SkillManifestJSON');
     });
   });
 });

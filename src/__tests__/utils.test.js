@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   isWebLookupIntent,
   extractWebQuery,
+  isFactualQuestion,
+  detectTaskType,
+  buildEnhancedQuery,
+  sanitizeModelOutput,
   looksLikeLegacyRuntimeScript,
   parseModelSizeToBytes
 } from '../utils.js';
@@ -103,6 +107,94 @@ describe('extractWebQuery', () => {
 
   it('trims whitespace from result', () => {
     expect(extractWebQuery('search for   spaced query  ')).toBe('spaced query');
+  });
+});
+
+// ─── isFactualQuestion ───────────────────────────────────────────────────────
+
+describe('isFactualQuestion', () => {
+  it('detects capital/population/date style questions', () => {
+    expect(isFactualQuestion('what is the capital of Roraima?')).toBe(true);
+    expect(isFactualQuestion('population of Japan')).toBe(true);
+    expect(isFactualQuestion('when was Brazil founded?')).toBe(true);
+  });
+
+  it('returns false for non-factual creative prompts', () => {
+    expect(isFactualQuestion('write me a poem about the ocean')).toBe(false);
+    expect(isFactualQuestion('help me brainstorm a brand name')).toBe(false);
+  });
+});
+
+// ─── detectTaskType ──────────────────────────────────────────────────────────
+
+describe('detectTaskType', () => {
+  it('detects debug-oriented requests', () => {
+    expect(detectTaskType('help me debug why the login flow is failing')).toBe('debug');
+  });
+
+  it('detects planning requests', () => {
+    expect(detectTaskType('plan my launch checklist for next week')).toBe('plan');
+  });
+
+  it('detects verification/review requests', () => {
+    expect(detectTaskType('review this answer and verify it before I send')).toBe('verify');
+  });
+});
+
+// ─── buildEnhancedQuery ──────────────────────────────────────────────────────
+
+describe('buildEnhancedQuery', () => {
+  it('returns short greetings unchanged', () => {
+    expect(buildEnhancedQuery('hello')).toBe('hello');
+  });
+
+  it('adds a factual guard for fact-seeking questions', () => {
+    const result = buildEnhancedQuery('What is the capital of Roraima and where is it located?');
+    expect(result).toContain('Answer only with verified facts');
+  });
+
+  it('injects provided web context for longer queries', () => {
+    const result = buildEnhancedQuery('Explain the history of Recife in a concise way for me.', 'Recife is the capital of Pernambuco.');
+    expect(result).toContain('[Web context available: Recife is the capital of Pernambuco.]');
+  });
+
+  it('adds debug guidance for troubleshooting questions', () => {
+    const result = buildEnhancedQuery('Please debug why the local model keeps failing after download.');
+    expect(result).toContain('Mode: Debug');
+    expect(result).toContain('root cause');
+  });
+
+  it('adds planning guidance for multi-step requests', () => {
+    const result = buildEnhancedQuery('Plan a step-by-step launch checklist for AI Space next week.');
+    expect(result).toContain('Mode: Plan');
+    expect(result).toContain('numbered steps');
+  });
+
+  it('adds verification guidance for review-style requests', () => {
+    const result = buildEnhancedQuery('Verify this answer before I share it with the team.');
+    expect(result).toContain('Mode: Verify');
+    expect(result).toContain('evidence');
+  });
+});
+
+// ─── sanitizeModelOutput ─────────────────────────────────────────────────────
+
+describe('sanitizeModelOutput', () => {
+  it('removes hallucinated model identity claims', () => {
+    expect(sanitizeModelOutput("I'm ChatGPT and I can help")).toContain('I am AI Space');
+  });
+
+  it('removes filler openers', () => {
+    expect(sanitizeModelOutput('Certainly! The capital is Boa Vista.')).toBe('The capital is Boa Vista.');
+  });
+
+  it('deduplicates repeated sentences', () => {
+    const result = sanitizeModelOutput('Boa Vista is the capital. Boa Vista is the capital. Boa Vista is the capital.');
+    expect(result).toBe('Boa Vista is the capital.');
+  });
+
+  it('removes generic AI disclaimers', () => {
+    expect(sanitizeModelOutput('As an AI language model, I can help with that.')).not.toContain('As an AI language model');
   });
 });
 

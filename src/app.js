@@ -12,7 +12,16 @@ import { Camera } from './camera.js';
 import { deviceAuthFlow, getAuthIssuer, getClientIdOverride, setClientIdOverride, clearClientIdOverride } from './codex-auth.js';
 import { RelayHub } from './relays.js';
 import { RuntimeAgent } from './runtime-agent.js';
-import { isWebLookupIntent, extractWebQuery, looksLikeLegacyRuntimeScript, parseModelSizeToBytes } from './utils.js';
+import { SkillStudio } from './skill-studio.js';
+import {
+  isWebLookupIntent,
+  extractWebQuery,
+  isFactualQuestion,
+  buildEnhancedQuery,
+  sanitizeModelOutput,
+  looksLikeLegacyRuntimeScript,
+  parseModelSizeToBytes
+} from './utils.js';
 
 // State
 const state = {
@@ -33,6 +42,7 @@ const audit = new Audit();
 const shortcuts = new Shortcuts();
 const relays = new RelayHub();
 const runtimeAgent = new RuntimeAgent();
+const skillStudio = new SkillStudio();
 const voice = new Voice();
 const camera = new Camera();
 let ui = null;
@@ -125,6 +135,9 @@ function detectRuntimePresetFromText(text) {
   if (t.includes('artifact') || t.includes('relay')) {
     return presets.find((p) => p.id === 'relay-artifact') || presets[0];
   }
+  if (t.includes('verify') || t.includes('audit')) {
+    return presets.find((p) => p.id === 'workflow-audit') || presets[0];
+  }
   if (t.includes('navigate') || t.includes('open site') || t.includes('open page')) {
     return presets.find((p) => p.id === 'navigate-flow') || presets[0];
   }
@@ -139,6 +152,17 @@ function parseLocalSkillIntent(text) {
 
   if (/(stop|cancel)\s+runtime/.test(lower)) {
     return { kind: 'runtime-stop' };
+  }
+
+  if (/\b(list|show)\s+(?:my\s+|local\s+|saved\s+)?skills\b/.test(lower)) {
+    return { kind: 'skill-list' };
+  }
+
+  if (/\b(workflow\s+studio|create\s+(?:a\s+)?(?:local\s+|workflow\s+|reusable\s+)?skill|save\s+(?:this|that)?\s*as\s+(?:a\s+)?skill|draft\s+(?:a\s+)?skill|build\s+(?:a\s+)?skill)\b/.test(lower)) {
+    return {
+      kind: 'skill-studio',
+      draft: skillStudio.draftFromText(raw)
+    };
   }
 
   if (/send\s+relay\s+now|run\s+relay\s+now/.test(lower)) {
@@ -165,6 +189,7 @@ function parseLocalSkillIntent(text) {
     else if (/(morning|briefing)/.test(lower)) actionId = 'morning_briefing';
     else if (/(extract|scrape)/.test(lower)) actionId = 'web_extract';
     else if (/(reminder|todo)/.test(lower)) actionId = 'create_reminder';
+    else if (/(workflow|runbook|multi-step|plan)/.test(lower)) actionId = 'workflow_plan';
 
     let providerId = 'local';
     if (/claude/.test(lower)) providerId = 'claude';
@@ -182,6 +207,75 @@ function parseLocalSkillIntent(text) {
   }
 
   return null;
+}
+
+function formatSkillDraftSummary(draft) {
+  const lines = [
+    `Local skill draft ready: ${draft.name}`,
+    `Relay hint: ${draft.relayId}`,
+    `Use when: ${draft.whenToUse}`
+  ];
+
+  const steps = (draft.steps || [])
+    .slice(0, 4)
+    .map((step, index) => `${index + 1}. ${step.title} — ${step.successCriteria}`);
+
+  if (steps.length > 0) {
+    lines.push(`Planned flow:\n${steps.join('\n')}`);
+  }
+
+  lines.push('I loaded the full Workflow Studio prompt into chat so you can review or send it.');
+  return lines.join('\n\n');
+}
+
+async function getSavedSkillDrafts() {
+  if (!memoryReady) return [];
+  try {
+    const items = await memory.getSharedContent();
+    return items.filter((item) => item?.type === 'skill-manifest');
+  } catch {
+    return [];
+  }
+}
+
+async function queueSkillStudioDraft(draft, { saveDraft = true, source = 'chat' } = {}) {
+  if (!draft) return false;
+
+  const inputEl = document.getElementById('chat-input');
+  const hintEl = document.getElementById('skill-studio-hint');
+
+  if (inputEl) {
+    inputEl.value = draft.prompt;
+    ui.autoResizeInput();
+    ui.setSendEnabled(true);
+  }
+
+  if (hintEl) {
+    hintEl.textContent = `Draft ready: ${draft.name} · relay ${draft.relayId}. Review it in chat and send when ready.`;
+  }
+
+  if (saveDraft && memoryReady) {
+    try {
+      await memory.saveSharedContent({
+        ...draft,
+        id: `skill_${draft.id}_${Date.now()}`,
+        templateId: draft.id,
+        type: 'skill-manifest',
+        source: `skill-studio-${source}`,
+        createdAt: Date.now()
+      });
+    } catch {}
+  }
+
+  await auditLog('action', {
+    kind: 'skill_studio_draft',
+    skillId: draft.id,
+    relayId: draft.relayId,
+    source
+  });
+
+  await populateSkillStudioControls();
+  return true;
 }
 
 function runRuntimeSkill(script, runtimeModeForRun) {
@@ -246,6 +340,27 @@ async function tryHandleLocalFeatureSkill(userText) {
     return {
       handled: true,
       response: cancelled ? 'Runtime stopped successfully.' : 'Could not stop runtime job.'
+    };
+  }
+
+  if (intent.kind === 'skill-list') {
+    const saved = await getSavedSkillDrafts();
+    return {
+      handled: true,
+      response: skillStudio.summarizeSavedSkills(saved)
+    };
+  }
+
+  if (intent.kind === 'skill-studio') {
+    const draft = intent.draft || skillStudio.draftFromText(userText);
+    openLiveActivity('Workflow Studio', 'Drafting reusable local skill', 'running');
+    await queueSkillStudioDraft(draft, { saveDraft: true, source: 'chat' });
+    appendLiveActivityLog(`skill=${draft.name}, relay=${draft.relayId}`);
+    updateLiveActivityStatus('Draft ready', 'idle');
+    closeLiveActivity(2000);
+    return {
+      handled: true,
+      response: formatSkillDraftSummary(draft)
     };
   }
 
@@ -364,32 +479,33 @@ async function tryHandleLocalFeatureSkill(userText) {
 
 async function fetchLocalInternetContext(query) {
   const q = extractWebQuery(query);
-  if (!q || !navigator.onLine || !state.localInternetAssist) return '';
+  if (!q || !navigator.onLine) return '';
 
-  const search = encodeURIComponent(q.slice(0, 180));
-  const url = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${search}&limit=3&namespace=0&format=json&origin=*`;
+  const isFactual = isFactualQuestion(query);
+  if (!isFactual && !state.localInternetAssist) return '';
+
+  const search = encodeURIComponent(q.slice(0, 150));
+  const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${search}&srlimit=1&format=json&origin=*`;
 
   try {
-    const res = await fetch(url, { method: 'GET' });
+    const res = await fetch(searchUrl, { method: 'GET' });
     if (!res.ok) return '';
     const data = await res.json();
-    const titles = Array.isArray(data?.[1]) ? data[1] : [];
-    const descs = Array.isArray(data?.[2]) ? data[2] : [];
-    const links = Array.isArray(data?.[3]) ? data[3] : [];
+    const results = data?.query?.search || [];
+    if (!results.length) return '';
 
-    const items = [];
-    for (let i = 0; i < Math.min(3, titles.length); i++) {
-      const title = titles[i] || 'Untitled';
-      const desc = descs[i] || '';
-      const link = links[i] || '';
-      items.push(`${i + 1}. ${title}${desc ? ' — ' + desc : ''}${link ? ' (' + link + ')' : ''}`);
-    }
+    const pageId = results[0]?.pageid;
+    if (!pageId) return '';
 
-    if (items.length === 0) return '';
-    return [
-      'Live web context (use cautiously, may be incomplete):',
-      ...items
-    ].join('\n');
+    const extractUrl = `https://en.wikipedia.org/w/api.php?action=query&pageids=${pageId}&prop=extracts&exintro=1&explaintext=1&exsentences=3&format=json&origin=*`;
+    const extractRes = await fetch(extractUrl, { method: 'GET' });
+    if (!extractRes.ok) return '';
+
+    const extractData = await extractRes.json();
+    const page = Object.values(extractData?.query?.pages || {})[0];
+    const extract = String(page?.extract || '').slice(0, 500).trim();
+
+    return extract ? `Factual context from Wikipedia:\n${extract}` : '';
   } catch {
     return '';
   }
@@ -1182,6 +1298,12 @@ function wireEventListeners() {
   const relayRun = document.getElementById('relay-run-btn');
   if (relayRun) relayRun.addEventListener('click', handleRunRelayArtifact);
 
+  const skillStudioBuildBtn = document.getElementById('skill-studio-build-btn');
+  if (skillStudioBuildBtn) skillStudioBuildBtn.addEventListener('click', () => handleBuildSkillStudio(true));
+
+  const skillStudioOpenBtn = document.getElementById('skill-studio-open-btn');
+  if (skillStudioOpenBtn) skillStudioOpenBtn.addEventListener('click', () => handleBuildSkillStudio(false));
+
   const runtimePreset = document.getElementById('runtime-preset');
   if (runtimePreset) runtimePreset.addEventListener('change', handleRuntimePresetChange);
 
@@ -1436,6 +1558,81 @@ function populateRelayControls() {
   handleRelayTypeChange();
 }
 
+async function populateSkillStudioControls() {
+  const catalogEl = document.getElementById('skill-studio-catalog');
+  if (!catalogEl) return;
+
+  const entries = [skillStudio.getBuiltInDefinition()];
+  const saved = await getSavedSkillDrafts();
+  saved.slice(0, 5).forEach((item) => {
+    const normalized = skillStudio.normalizeSavedSkill(item);
+    if (normalized) entries.push(normalized);
+  });
+
+  catalogEl.innerHTML = '';
+
+  entries.slice(0, 6).forEach((entry, index) => {
+    const row = document.createElement('div');
+    row.style.padding = '10px 12px';
+    row.style.border = '1px solid var(--border)';
+    row.style.borderRadius = '12px';
+    row.style.background = index === 0 ? 'rgba(255,255,255,0.03)' : 'transparent';
+
+    const title = document.createElement('div');
+    title.style.fontSize = '13px';
+    title.style.color = 'var(--fg)';
+    title.style.marginBottom = '4px';
+    title.textContent = `${entry.name} · ${entry.relayId || 'device'}`;
+
+    const desc = document.createElement('div');
+    desc.style.fontSize = '12px';
+    desc.style.color = 'var(--fg-dim)';
+    desc.style.lineHeight = '1.45';
+    desc.textContent = entry.whenToUse || entry.description || 'Reusable local skill draft';
+
+    row.appendChild(title);
+    row.appendChild(desc);
+    catalogEl.appendChild(row);
+  });
+}
+
+async function handleBuildSkillStudio(saveDraft = true) {
+  const nameEl = document.getElementById('skill-studio-name');
+  const goalEl = document.getElementById('skill-studio-goal');
+  const relayEl = document.getElementById('skill-studio-relay');
+  const hintEl = document.getElementById('skill-studio-hint');
+
+  const goal = goalEl?.value?.trim() || '';
+  if (!goal) {
+    ui.showNotification('Describe the workflow first', 'error');
+    return;
+  }
+
+  const draft = skillStudio.draftFromText(goal, {
+    name: nameEl?.value?.trim() || undefined,
+    goal,
+    relayId: relayEl?.value || 'auto'
+  });
+
+  openLiveActivity('Workflow Studio', saveDraft ? 'Saving local draft' : 'Preparing prompt', 'running');
+  await queueSkillStudioDraft(draft, { saveDraft, source: 'settings' });
+  appendLiveActivityLog(`skill=${draft.name}, relay=${draft.relayId}`);
+  updateLiveActivityStatus(saveDraft ? 'Saved locally' : 'Prompt ready', 'idle');
+  closeLiveActivity(1800);
+
+  if (hintEl) {
+    hintEl.textContent = saveDraft
+      ? `Saved “${draft.name}” locally and opened the prompt in chat.`
+      : `Prompt ready for “${draft.name}”. Review it in chat before sending.`;
+  }
+
+  if (nameEl && !nameEl.value.trim()) {
+    nameEl.value = draft.name;
+  }
+
+  ui.showNotification(saveDraft ? 'Local skill draft saved' : 'Workflow prompt ready', 'success');
+}
+
 async function handleBuildRelayArtifact() {
   const relayTypeEl = document.getElementById('relay-type');
   const relayActionEl = document.getElementById('relay-action');
@@ -1611,6 +1808,42 @@ async function sendMessage(text) {
   const engineStatus = engine.getStatus();
   const canLocal = engineStatus.status === 'ready' && state.mode !== 'cloud';
   const canCloud = (state.mode === 'cloud' || state.mode === 'hybrid') && engine.cloudConfigured;
+  const factualQuery = isFactualQuestion(text);
+  const webIntent = isWebLookupIntent(text) || factualQuery;
+
+  let liveContext = '';
+  let modelMessages = [...state.messages];
+
+  if (navigator.onLine && (state.localInternetAssist || webIntent)) {
+    liveContext = await fetchLocalInternetContext(text);
+    if (liveContext) {
+      modelMessages.unshift({
+        role: 'system',
+        content: `[WEB_CONTEXT]\n${liveContext}\nUse these snippets as available web context for this turn. Do not claim full browsing access.`
+      });
+      appendRuntimeOutput('Factual web context attached to current request.');
+      await auditLog('internet_consult', {
+        source: 'wikipedia-extract',
+        queryLength: text.length,
+        autoTriggered: factualQuery && !state.localInternetAssist
+      });
+    } else if (webIntent) {
+      appendRuntimeOutput('Web/factual lookup requested but no live context returned.');
+    }
+  } else if (webIntent && !state.localInternetAssist && !factualQuery) {
+    appendRuntimeOutput('Web lookup intent detected. Enable Local Internet Assist in Settings.');
+  }
+
+  const enhancedQuery = buildEnhancedQuery(text, liveContext);
+  for (let i = modelMessages.length - 1; i >= 0; i--) {
+    if (modelMessages[i]?.role === 'user') {
+      modelMessages[i] = {
+        ...modelMessages[i],
+        content: enhancedQuery
+      };
+      break;
+    }
+  }
 
   if (!navigator.onLine && !canLocal && (state.mode === 'cloud' || state.mode === 'hybrid')) {
     const msg = 'You are offline and cloud mode is selected. Switch to local mode or wait until connection is restored.';
@@ -1641,31 +1874,14 @@ async function sendMessage(text) {
       ui.showTyping(false);
       ui.renderMessage('assistant', '', true);
 
-      const modelMessages = [...state.messages];
-      const webIntent = isWebLookupIntent(text);
-      if (state.localInternetAssist && navigator.onLine) {
-        const liveContext = await fetchLocalInternetContext(text);
-        if (liveContext) {
-          modelMessages.unshift({
-            role: 'system',
-            content: `[WEB_CONTEXT]\n${liveContext}\nUse these snippets as available web context for this turn. Do not claim full browsing access.`
-          });
-          appendRuntimeOutput('Local internet context attached to current request.');
-          await auditLog('internet_consult', { source: 'wikipedia-opensearch', queryLength: text.length });
-        } else if (webIntent) {
-          appendRuntimeOutput('Web lookup requested but no live context returned.');
-          ui.showNotification('No web results retrieved right now. Try a more specific query.', 'error');
-        }
-      } else if (webIntent && !state.localInternetAssist) {
-        appendRuntimeOutput('Web lookup intent detected. Enable Local Internet Assist in Settings.');
-      }
-
       let fullResponse = '';
       await engine.chat(modelMessages, (token, accumulated) => {
         fullResponse = accumulated;
         ui.updateStreamingMessage(accumulated);
       });
 
+      fullResponse = sanitizeModelOutput(fullResponse);
+      ui.updateStreamingMessage(fullResponse);
       ui.finalizeStreamingMessage();
       state.messages.push({ role: 'assistant', content: fullResponse });
       if (pendingShortcutActions.length > 0) {
@@ -1696,11 +1912,13 @@ async function sendMessage(text) {
       ui.renderMessage('assistant', '', true);
 
       let fullResponse = '';
-      await engine.chat(state.messages, (token, accumulated) => {
+      await engine.chat(modelMessages, (token, accumulated) => {
         fullResponse = accumulated;
         ui.updateStreamingMessage(accumulated);
       });
 
+      fullResponse = sanitizeModelOutput(fullResponse);
+      ui.updateStreamingMessage(fullResponse);
       ui.finalizeStreamingMessage();
       state.messages.push({ role: 'assistant', content: fullResponse });
       if (pendingShortcutActions.length > 0) {
@@ -1783,6 +2001,7 @@ async function updateSettingsView() {
   ui.updateModeSelector(state.mode);
   populateRelayControls();
   populateRuntimeControls();
+  await populateSkillStudioControls();
 
   const engineStatus = engine.getStatus();
   const modelName = engineStatus.modelInfo

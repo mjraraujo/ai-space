@@ -15,6 +15,10 @@ describe('AIEngine', () => {
       expect(typeof AIEngine.getModels()).toBe('object');
     });
 
+    it('uses Llama 3.2 1B as the default model ID', () => {
+      expect(AIEngine.getDefaultModelId()).toBe('Llama-3.2-1B-Instruct-q4f16_1-MLC');
+    });
+
     it('contains exactly 4 models', () => {
       expect(Object.keys(AIEngine.getModels())).toHaveLength(4);
     });

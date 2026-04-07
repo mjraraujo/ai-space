@@ -21,7 +21,7 @@ AI Space now includes a local-first background runtime (beta) that runs in a Web
   - `NAVIGATE <url>`
   - `RETURN <text>` / `RETURNJSON <json>`
   - Variable interpolation with `{{var.path}}`
-- Presets: health check, relay artifact builder, and navigate flow
+- Presets: health check, relay artifact builder, workflow audit snapshot, and navigate flow
 
 This runtime is browser-compiled and sandboxed to web APIs, and does not execute host shell commands directly. Arbitrary JavaScript is blocked in `Strict` mode and allowed only in `Trusted` mode.
 
@@ -37,7 +37,19 @@ Relay and Runtime are also integrated as local-model skills triggered by chat in
 - Relay examples:
   - "create relay for browser web extract"
   - "create relay to draft reply"
+  - "create a relay workflow plan for my trip"
   - "send relay now"
+
+### Workflow Studio (Imported Advanced Skill)
+
+AI Space now includes `workflow-studio`, a high-complexity local-first skill inspired by the bundled skill architecture from the imported source bundle.
+
+- Trigger it from chat with prompts like:
+  - `create a skill for my weekly review`
+  - `show my saved skills`
+  - `workflow studio: plan my next launch checklist`
+- Or trigger it from iOS Shortcuts with `?skill=workflow-studio&data=BASE64`
+- Output shape: Goal, Inputs, Workflow Steps, Approval Checkpoints, Success Criteria, and `SkillManifestJSON`
 
 When detected, these intents execute locally in the app controller before normal local inference.
 
@@ -77,6 +89,7 @@ Each skill is defined with the following structure:
 | `quick-capture` | Quick Capture | Capture a note or thought |
 | `quick-note` | Quick Note | Voice/text quick note saved locally |
 | `calendar-sync` | Calendar Sync | Summarize upcoming events and conflicts |
+| `workflow-studio` | Workflow Studio | Turn a complex routine into a reusable, approval-aware local skill |
 
 ## Protocol
 

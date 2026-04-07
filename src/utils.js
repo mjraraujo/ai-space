@@ -37,6 +37,115 @@ export function extractWebQuery(text) {
 }
 
 /**
+ * Heuristic for fact-seeking questions that benefit from extra grounding.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isFactualQuestion(text) {
+  return /\b(capital|population|president|currency|distance|located|founded|born|when|where|who|what is|how many|year|date)\b/i.test(String(text || ''));
+}
+
+/**
+ * Classify the user's request into a quality mode inspired by Claude's skill system.
+ * @param {string} text
+ * @returns {'debug'|'plan'|'verify'|'general'}
+ */
+export function detectTaskType(text) {
+  const raw = String(text || '');
+
+  if (/\b(debug|bug|fix|broken|failing|failure|issue|problem|error|why .* fail|root cause|diagnose)\b/i.test(raw)) {
+    return 'debug';
+  }
+
+  if (/\b(plan|roadmap|strategy|checklist|step-by-step|steps|launch|organize|break down|workflow)\b/i.test(raw)) {
+    return 'plan';
+  }
+
+  if (/\b(verify|review|check|validate|double-check|audit|prove|evidence)\b/i.test(raw)) {
+    return 'verify';
+  }
+
+  return 'general';
+}
+
+function buildTaskModeGuidance(text) {
+  const taskType = detectTaskType(text);
+
+  if (taskType === 'debug') {
+    return '\n[Mode: Debug]\n[Instruction: Use systematic debugging. Identify the root cause, separate known facts from assumptions, and propose the smallest next check.]';
+  }
+
+  if (taskType === 'plan') {
+    return '\n[Mode: Plan]\n[Instruction: Break the answer into numbered steps, highlight dependencies, and end with the best first action.]';
+  }
+
+  if (taskType === 'verify') {
+    return '\n[Mode: Verify]\n[Instruction: Separate evidence from assumptions, note any uncertainty clearly, and do not claim success without evidence.]';
+  }
+
+  return '';
+}
+
+/**
+ * Wrap user text with lightweight reasoning scaffolding to improve small-model answers.
+ * @param {string} userText
+ * @param {string} [webContext]
+ * @returns {string}
+ */
+export function buildEnhancedQuery(userText, webContext = '') {
+  const raw = String(userText || '');
+  if (!raw) return '';
+
+  if (
+    raw.length < 20 ||
+    /^(hi|hello|hey|oi|olá)\b/i.test(raw.trim()) ||
+    /^(System constraints:|You are AI Space Workflow Studio\.|\[WEB_CONTEXT\])/i.test(raw.trim())
+  ) {
+    return raw;
+  }
+
+  const contextBlock = webContext
+    ? `\n\n[Web context available: ${webContext}]\n`
+    : '';
+
+  const factualGuard = isFactualQuestion(raw)
+    ? '\n[Instruction: Answer only with verified facts from your training. If uncertain, say so.]'
+    : '';
+
+  const modeGuidance = buildTaskModeGuidance(raw);
+
+  return `${raw}${contextBlock}${factualGuard}${modeGuidance}`.trim();
+}
+
+/**
+ * Clean up common local-model artifacts before display.
+ * @param {string} text
+ * @returns {string}
+ */
+export function sanitizeModelOutput(text) {
+  if (!text) return text;
+
+  let output = String(text);
+
+  output = output.replace(/\b(I am|I'm)\s+(Phi|GPT|ChatGPT|Gemini|Bard|Copilot|Claude)\b/gi, 'I am AI Space');
+  output = output.replace(/^As an AI language model,?\s*/i, '');
+  output = output.replace(/^(Certainly!|Of course!|Sure!|Great question!|Absolutely!)\s*/i, '');
+
+  const sentences = output.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const seen = new Set();
+  const deduped = sentences.filter((sentence) => {
+    const key = sentence.trim().toLowerCase().slice(0, 60);
+    if (!key) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  output = deduped.join(' ').replace(/\s+/g, ' ').trim();
+  return output;
+}
+
+/**
  * Detect if a runtime script looks like legacy JS-style code rather than the DSL.
  * @param {string} script
  * @returns {boolean}

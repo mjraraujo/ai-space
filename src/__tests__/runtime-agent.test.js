@@ -11,8 +11,8 @@ describe('RuntimeAgent', () => {
   // ─── getPresets ───────────────────────────────────────────────────────────
 
   describe('getPresets()', () => {
-    it('returns exactly 3 presets', () => {
-      expect(RuntimeAgent.getPresets()).toHaveLength(3);
+    it('returns exactly 4 presets', () => {
+      expect(RuntimeAgent.getPresets()).toHaveLength(4);
     });
 
     it('includes health-check preset', () => {
@@ -28,6 +28,11 @@ describe('RuntimeAgent', () => {
     it('includes navigate-flow preset', () => {
       const ids = RuntimeAgent.getPresets().map(p => p.id);
       expect(ids).toContain('navigate-flow');
+    });
+
+    it('includes workflow-audit preset', () => {
+      const ids = RuntimeAgent.getPresets().map(p => p.id);
+      expect(ids).toContain('workflow-audit');
     });
 
     it('each preset has id, name, script', () => {

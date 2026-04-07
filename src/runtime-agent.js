@@ -32,6 +32,16 @@ export class RuntimeAgent {
         ].join('\n')
       },
       {
+        id: 'workflow-audit',
+        name: 'Workflow Audit Snapshot',
+        script: [
+          "LOG Capturing a local workflow verification snapshot...",
+          "RUN now -> now",
+          "LOG Snapshot time: {{now.output}}",
+          "RETURNJSON {\"status\":\"ok\",\"phase\":\"verify\",\"requiresApproval\":true}"
+        ].join('\n')
+      },
+      {
         id: 'navigate-flow',
         name: 'Navigate + Wait Flow',
         script: [

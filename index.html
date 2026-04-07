@@ -2037,10 +2037,10 @@
       <!-- Model picker (shown when WebGPU is available) -->
       <div id="onboarding-model-section" style="display:none;width:100%;max-width:340px;margin:0 auto 16px;">
         <select class="onboarding-input" id="onboarding-model-picker" style="appearance:auto;-webkit-appearance:auto;cursor:pointer;">
-          <option value="SmolLM2-360M-Instruct-q4f16_1-MLC">SmolLM2 360M — 200 MB  (fastest, start here)</option>
-          <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC" selected>Qwen 2.5 0.5B — 350 MB  (recommended)</option>
-          <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B — 700 MB  (stronger reasoning)</option>
-          <option value="Phi-3.5-mini-instruct-q4f16_1-MLC">Phi 3.5 Mini 3.8B — 2.2 GB  (most capable, needs 4 GB+ RAM)</option>
+          <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC" selected>Llama 3.2 1B — 700 MB  (best quality, recommended)</option>
+          <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC">Qwen 2.5 0.5B — 350 MB  (ultra fast)</option>
+          <option value="SmolLM2-360M-Instruct-q4f16_1-MLC">SmolLM2 360M — 200 MB  (fastest)</option>
+          <option value="Phi-3.5-mini-instruct-q4f16_1-MLC">Phi 3.5 Mini 3.8B — 2.2 GB  (large, needs 4 GB+ RAM)</option>
         </select>
         <p style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.5;">Downloaded once, runs offline forever after that. Model stays on your device — never uploaded.</p>
       </div>
@@ -2202,6 +2202,41 @@
       </div>
 
       <div class="settings-section">
+        <div class="settings-section-title">Workflow Studio <span style="font-size:11px;color:var(--fg-dim);font-weight:400;margin-left:6px;">Imported Skill</span></div>
+        <div class="settings-card" style="padding:16px;">
+          <p style="font-size:13px;color:var(--fg-muted);line-height:1.55;margin-bottom:14px;">
+            <strong style="color:var(--fg);">What is Workflow Studio?</strong><br>
+            Inspired by the bundled-skill architecture from the imported source, it turns a complex routine into a reusable local skill with steps, approval checkpoints, and a relay-safe manifest.
+          </p>
+
+          <label class="settings-input-label">Skill name (optional)</label>
+          <input class="settings-input" id="skill-studio-name" type="text" placeholder="e.g. Weekly Review">
+
+          <label class="settings-input-label">What should this skill do?</label>
+          <textarea class="settings-input" id="skill-studio-goal" rows="3" placeholder="Describe the workflow you want AI Space to turn into a reusable local skill…"></textarea>
+
+          <label class="settings-input-label">Best relay</label>
+          <select class="settings-input" id="skill-studio-relay" style="appearance:auto;-webkit-appearance:auto;">
+            <option value="auto">Auto-detect</option>
+            <option value="shortcuts">iOS Shortcuts</option>
+            <option value="browser">Browser</option>
+            <option value="device">Device</option>
+          </select>
+
+          <div style="font-size:12px;color:var(--fg-dim);margin-top:8px;line-height:1.4;" id="skill-studio-hint">
+            Draft Skill → saves an encrypted local manifest and loads the full Workflow Studio prompt into chat.
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="settings-btn" id="skill-studio-build-btn" style="flex:1;">Draft Skill</button>
+            <button class="settings-btn" id="skill-studio-open-btn" style="flex:1;">Open in Chat</button>
+          </div>
+
+          <div id="skill-studio-catalog" style="margin-top:14px;display:flex;flex-direction:column;gap:8px;"></div>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <div class="settings-section-title">Background Runtime <span style="font-size:11px;color:var(--fg-dim);font-weight:400;margin-left:6px;">Beta</span></div>
         <div class="settings-card" style="padding:16px;">
           <p style="font-size:13px;color:var(--fg-muted);line-height:1.55;margin-bottom:14px;">
@@ -2311,9 +2346,9 @@
         <div class="settings-section-title">Local Model</div>
         <div class="settings-card" style="padding: 16px;">
           <select class="settings-input" id="local-model-picker" style="appearance:auto;-webkit-appearance:auto;">
-            <option value="SmolLM2-360M-Instruct-q4f16_1-MLC">SmolLM2 360M — 200 MB (smallest, start here)</option>
-            <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC">Qwen 2.5 0.5B — 350 MB (recommended)</option>
-            <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B — 700 MB (may hit download limits)</option>
+            <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B — 700 MB (best quality, default)</option>
+            <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC">Qwen 2.5 0.5B — 350 MB (ultra fast)</option>
+            <option value="SmolLM2-360M-Instruct-q4f16_1-MLC">SmolLM2 360M — 200 MB (fastest)</option>
             <option value="Phi-3.5-mini-instruct-q4f16_1-MLC">Phi 3.5 Mini 3.8B — 2.2 GB (large, may hit limits)</option>
           </select>
           <div style="font-size:12px;color:var(--fg-dim);margin-top:8px;" id="local-model-hint">Runs entirely on your device via WebGPU</div>

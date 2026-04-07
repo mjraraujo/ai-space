@@ -11,52 +11,59 @@
  *   2. User triggered the action
  */
 
+const DEFAULT_MODEL = 'Llama-3.2-1B-Instruct-q4f16_1-MLC';
+
 const MODELS = {
-  'SmolLM2-360M-Instruct-q4f16_1-MLC': {
-    name: 'SmolLM2 360M',
-    size: '200 MB',
-    description: 'Ultra-fast. Tiny download. Start here.'
+  'Llama-3.2-1B-Instruct-q4f16_1-MLC': {
+    name: 'Llama 3.2 1B',
+    size: '700 MB',
+    description: 'Best quality local reasoning. Recommended default.'
   },
   'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': {
     name: 'Qwen 2.5 0.5B',
     size: '350 MB',
-    description: 'Good balance. Recommended for most users.'
+    description: 'Ultra-fast balance for everyday use.'
   },
-  'Llama-3.2-1B-Instruct-q4f16_1-MLC': {
-    name: 'Llama 3.2 1B',
-    size: '700 MB',
-    description: 'Stronger reasoning. Slower download.'
+  'SmolLM2-360M-Instruct-q4f16_1-MLC': {
+    name: 'SmolLM2 360M',
+    size: '200 MB',
+    description: 'Fastest option for lightweight tasks.'
   },
   'Phi-3.5-mini-instruct-q4f16_1-MLC': {
     name: 'Phi 3.5 Mini 3.8B',
     size: '2.2 GB',
-    description: 'Most capable local model. Needs 4GB+ RAM.'
+    description: 'Largest local model. Needs 4GB+ RAM.'
   }
 };
 
-const SYSTEM_PROMPT = `You are the user's personal AI. You live on their device, privately. You remember everything they've told you in this conversation.
+const SYSTEM_PROMPT = `You are AI Space — a precise, honest, and highly capable personal AI assistant running locally on your device.
 
-How you behave:
-- Talk naturally, like a thoughtful friend who's genuinely helpful
-- Be warm but not fake. No corporate pleasantries. No "How can I assist you today?"
-- If you already know context from earlier in the conversation, use it. Don't ask again.
-- Give direct answers. If they ask something, answer it — don't redirect with questions unless you truly need more info
-- Be concise. Short responses when the question is simple. Longer when it matters.
-- You can think out loud when reasoning through something complex
-- If they share something personal, acknowledge it like a person would
-- You're running locally on their phone. You're private. You're theirs. Act like it.
+## Core Behavior
+- Answer DIRECTLY and ACCURATELY. Never fabricate facts.
+- If you don't know something, say: "I don't have reliable information on this."
+- Never invent names, capitals, dates, or statistics. Verify against your training knowledge.
+- Keep responses concise but complete. No filler. No padding.
 
-What you can do:
-- Summarize, draft replies, plan, organize thoughts, brainstorm, explain
-- Remember everything from this conversation
-- Be proactive — if you see a way to help further, suggest it briefly
+## Reasoning Protocol (follow this internally before every answer)
+1. What is the user ACTUALLY asking?
+2. Do I know this with confidence? If uncertain, say so explicitly.
+3. Structure: give the answer first, then explanation/context.
 
-What you don't do:
-- Don't start responses with "I'm an AI" or "As an AI language model"
-- Don't ask "Is there anything else?" at the end of every response
-- Don't pretend to have live internet/app/file access by default
-- If you receive a SYSTEM message beginning with [WEB_CONTEXT], treat that as provided web snippets for this turn and use them
-- Don't be sycophantic`;
+## Formatting Rules
+- Use markdown: **bold** for key terms, \`code\` for technical values, bullet lists for options.
+- Short answers for simple questions. Structured answers for complex ones.
+- Never start with "Certainly!", "Of course!", "Great question!" — go straight to the answer.
+
+## What You Are
+- Local AI — you run on this device. No cloud unless the user has configured it.
+- Privacy-first: you never share data. Everything stays on device.
+- You have a skills system for iOS Shortcuts automation.
+
+## Honesty Rules
+- WRONG: "The capital of Roraima is Belume." CORRECT: "The capital of Roraima is Boa Vista."
+- If asked about models, say: "I'm AI Space, your local private assistant."
+- Never claim to be GPT, Phi, Claude, or any other model by name.
+- If you receive a SYSTEM message beginning with [WEB_CONTEXT], treat it as turn-specific context and do not pretend to have full browsing access.`;
 
 export class AIEngine {
   constructor() {
@@ -101,7 +108,7 @@ export class AIEngine {
    */
   async init(modelId, onProgress) {
     if (!modelId) {
-      modelId = Object.keys(MODELS)[0];
+      modelId = DEFAULT_MODEL;
     }
 
     if (!MODELS[modelId]) {
@@ -186,6 +193,19 @@ export class AIEngine {
     }
   }
 
+  _getGenerationConfig(messages) {
+    const transcript = (messages || [])
+      .map((message) => typeof message?.content === 'string' ? message.content : '')
+      .join('\n');
+
+    const highPrecision = /\[Instruction: Answer only with verified facts|\[Mode: Verify\]|\[Mode: Debug\]/i.test(transcript);
+
+    return {
+      temperature: highPrecision ? 0.25 : 0.55,
+      max_tokens: highPrecision ? 900 : 1024
+    };
+  }
+
   /**
    * Local inference via web-llm
    */
@@ -201,13 +221,14 @@ export class AIEngine {
     ];
 
     let fullResponse = '';
+    const generationConfig = this._getGenerationConfig(fullMessages);
 
     try {
       const stream = await this.engine.chat.completions.create({
         messages: fullMessages,
         stream: true,
-        temperature: 0.7,
-        max_tokens: 1024
+        temperature: generationConfig.temperature,
+        max_tokens: generationConfig.max_tokens
       });
 
       for await (const chunk of stream) {
@@ -253,6 +274,7 @@ export class AIEngine {
     }
 
     try {
+      const generationConfig = this._getGenerationConfig(fullMessages);
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -263,8 +285,8 @@ export class AIEngine {
           model: this.cloudModel,
           messages: fullMessages,
           stream: true,
-          temperature: 0.7,
-          max_tokens: 1024
+          temperature: generationConfig.temperature,
+          max_tokens: generationConfig.max_tokens
         })
       });
 
@@ -333,6 +355,7 @@ export class AIEngine {
       .map((m) => ({ role: m.role, content: m.content || '' }));
 
     try {
+      const generationConfig = this._getGenerationConfig([{ role: 'system', content: systemContent }, ...anthropicMessages]);
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -342,8 +365,8 @@ export class AIEngine {
         },
         body: JSON.stringify({
           model: this.cloudModel,
-          max_tokens: 1024,
-          temperature: 0.7,
+          max_tokens: generationConfig.max_tokens,
+          temperature: generationConfig.temperature,
           system: systemContent,
           messages: anthropicMessages,
           stream: true
@@ -422,5 +445,9 @@ export class AIEngine {
    */
   static getModels() {
     return MODELS;
+  }
+
+  static getDefaultModelId() {
+    return DEFAULT_MODEL;
   }
 }
