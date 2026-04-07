@@ -17,6 +17,8 @@ import {
   isWebLookupIntent,
   extractWebQuery,
   isFactualQuestion,
+  detectTaskType,
+  recommendLocalModelFallback,
   buildEnhancedQuery,
   sanitizeModelOutput,
   looksLikeLegacyRuntimeScript,
@@ -849,9 +851,13 @@ async function setupReadyStep() {
 
   if (hasWebGPU) {
     if (badge) badge.textContent = '⚡ WebGPU available — runs on your device';
-    if (info) info.textContent = 'Pick a model to download. Smaller = faster. You can switch models anytime in Settings.';
+    if (info) info.textContent = 'Pick a model to download. Smaller = faster. If a larger model is rate-limited, switch to Qwen or SmolLM for a faster first start.';
     if (modelSection) modelSection.style.display = 'block';
-    if (startDownloadBtn) startDownloadBtn.style.display = 'block';
+    if (startDownloadBtn) {
+      startDownloadBtn.style.display = 'block';
+      startDownloadBtn.textContent = 'Download & Start';
+    }
+    if (errorEl) errorEl.style.display = 'none';
     if (enterBtn) enterBtn.style.display = 'none';
   } else {
     state.mode = 'cloud';
@@ -874,12 +880,19 @@ async function runOnboardingDownload(attempt = 1) {
   const errorEl = document.getElementById('onboarding-download-error');
   const errorMsg = document.getElementById('onboarding-download-error-msg');
   const startDownloadBtn = document.getElementById('onboarding-start-download');
+  const retryBtn = document.getElementById('onboarding-retry-download');
   const enterBtn = document.getElementById('onboarding-enter');
   const modelSection = document.getElementById('onboarding-model-section');
+  const modelPicker = document.getElementById('onboarding-model-picker');
+  const models = AIEngine.getModels();
 
-  const selectedModel = document.getElementById('onboarding-model-picker')?.value || null;
+  const selectedModel = modelPicker?.value || null;
 
-  if (startDownloadBtn) startDownloadBtn.style.display = 'none';
+  if (startDownloadBtn) {
+    startDownloadBtn.style.display = 'none';
+    startDownloadBtn.textContent = 'Download & Start';
+  }
+  if (retryBtn) retryBtn.textContent = 'Retry Download';
   if (errorEl) errorEl.style.display = 'none';
   if (modelSection) modelSection.style.display = 'none';
   if (downloadEl) downloadEl.style.display = 'flex';
@@ -908,21 +921,45 @@ async function runOnboardingDownload(attempt = 1) {
     const lower = msg.toLowerCase();
     const isRateLimit = lower.includes('quota') || lower.includes('rate') || lower.includes('429') || lower.includes('limit') || lower.includes('exceeded');
     const isStorage = lower.includes('storage') || lower.includes('space') || lower.includes('disk') || lower.includes('quotaexceeded');
+    const failedModelName = models[selectedModel]?.name || 'this model';
+    const fallbackModelId = recommendLocalModelFallback(selectedModel, {
+      isRateLimit,
+      isStorage,
+      deviceMemory: navigator.deviceMemory
+    });
+    const fallbackModelName = fallbackModelId ? (models[fallbackModelId]?.name || 'a smaller model') : '';
 
     let userMsg;
     if (isRateLimit) {
       const waitSec = attempt <= 1 ? 60 : attempt * 90;
-      userMsg = `HuggingFace is rate-limiting downloads right now. Wait ${waitSec} seconds and tap "Retry Download". This is temporary.`;
+      userMsg = fallbackModelName
+        ? `HuggingFace is rate-limiting ${failedModelName} right now. Wait ${waitSec} seconds and tap "Retry Download", or start now with ${fallbackModelName}.`
+        : `HuggingFace is rate-limiting downloads right now. Wait ${waitSec} seconds and tap "Retry Download". This is temporary.`;
     } else if (isStorage) {
-      userMsg = 'Not enough browser storage. Free up space or choose a smaller model, then retry.';
+      userMsg = fallbackModelName
+        ? `Not enough browser storage for ${failedModelName}. Free up space or switch now to ${fallbackModelName}.`
+        : 'Not enough browser storage. Free up space or choose a smaller model, then retry.';
     } else {
-      userMsg = `Download failed: ${msg}. Check your connection and retry.`;
+      userMsg = fallbackModelName
+        ? `Download failed: ${msg}. Check your connection, retry ${failedModelName}, or try ${fallbackModelName} now.`
+        : `Download failed: ${msg}. Check your connection and retry.`;
     }
 
     if (errorMsg) errorMsg.textContent = userMsg;
     if (errorEl) errorEl.style.display = 'block';
     if (modelSection) modelSection.style.display = 'block';
-    if (startDownloadBtn) startDownloadBtn.style.display = 'none'; // retry btn shown instead
+
+    if (retryBtn) {
+      retryBtn.textContent = `Retry ${failedModelName}`;
+    }
+
+    if (fallbackModelId && modelPicker && startDownloadBtn) {
+      modelPicker.value = fallbackModelId;
+      startDownloadBtn.style.display = 'block';
+      startDownloadBtn.textContent = `Try ${fallbackModelName} instead`;
+    } else if (startDownloadBtn) {
+      startDownloadBtn.style.display = 'none';
+    }
   }
 }
 
@@ -1157,6 +1194,19 @@ function wireEventListeners() {
   // Step 6: Start download button
   const startDownloadWireBtn = document.getElementById('onboarding-start-download');
   if (startDownloadWireBtn) startDownloadWireBtn.addEventListener('click', () => runOnboardingDownload(1));
+
+  const onboardingModelPicker = document.getElementById('onboarding-model-picker');
+  if (onboardingModelPicker) onboardingModelPicker.addEventListener('change', () => {
+    const errorEl = document.getElementById('onboarding-download-error');
+    const startBtn = document.getElementById('onboarding-start-download');
+    const retryBtn = document.getElementById('onboarding-retry-download');
+    if (errorEl) errorEl.style.display = 'none';
+    if (startBtn) {
+      startBtn.style.display = 'block';
+      startBtn.textContent = 'Download & Start';
+    }
+    if (retryBtn) retryBtn.textContent = 'Retry Download';
+  });
 
   // Step 6: Retry download
   const retryDownloadBtn = document.getElementById('onboarding-retry-download');
@@ -2279,19 +2329,37 @@ async function handleSwitchModel() {
     const lower = msg.toLowerCase();
     const isRateLimit = lower.includes('quota') || lower.includes('rate') || lower.includes('429') || lower.includes('limit') || lower.includes('exceeded');
     const isStorage = lower.includes('storage') || lower.includes('space') || lower.includes('disk') || lower.includes('quotaexceeded');
+    const fallbackModelId = recommendLocalModelFallback(modelId, {
+      isRateLimit,
+      isStorage,
+      deviceMemory: navigator.deviceMemory
+    });
+    const fallbackName = fallbackModelId ? (AIEngine.getModels()[fallbackModelId]?.name || 'a smaller model') : '';
 
     if (isRateLimit) {
       const waitMin = _switchModelAttempt <= 1 ? 1 : _switchModelAttempt * 2;
-      if (hint) hint.textContent = `HuggingFace is rate-limiting right now. Wait ${waitMin} minute${waitMin > 1 ? 's' : ''} then tap "Retry Download". This is temporary and only affects the first download.`;
+      if (hint) hint.textContent = fallbackName
+        ? `HuggingFace is rate-limiting right now. Wait ${waitMin} minute${waitMin > 1 ? 's' : ''}, or switch now to ${fallbackName} (already selected for you).`
+        : `HuggingFace is rate-limiting right now. Wait ${waitMin} minute${waitMin > 1 ? 's' : ''} then tap "Retry Download".`;
       ui.showNotification(`Rate limit hit — wait ${waitMin}m then retry`, 'error');
     } else if (isStorage) {
-      if (hint) hint.textContent = 'Not enough browser storage. Free some space (clear other site data) or pick a smaller model like SmolLM2 360M.';
+      if (hint) hint.textContent = fallbackName
+        ? `Not enough storage for this model. Try ${fallbackName} instead — it is already selected for you.`
+        : 'Not enough browser storage. Free some space or pick a smaller model like SmolLM2 360M.';
       ui.showNotification('Not enough storage for this model', 'error');
     } else {
-      if (hint) hint.textContent = `Download failed: ${msg}. Check your connection and tap "Retry Download".`;
+      if (hint) hint.textContent = fallbackName
+        ? `Download failed: ${msg}. Retry later or try ${fallbackName} now — it is already selected for you.`
+        : `Download failed: ${msg}. Check your connection and tap "Retry Download".`;
       ui.showNotification('Download failed — tap Retry', 'error');
     }
-    if (btn) btn.textContent = 'Retry Download';
+
+    if (fallbackModelId && picker) {
+      picker.value = fallbackModelId;
+      if (btn) btn.textContent = `Try ${fallbackName} instead`;
+    } else if (btn) {
+      btn.textContent = 'Retry Download';
+    }
   }
 }
 

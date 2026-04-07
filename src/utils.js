@@ -68,6 +68,39 @@ export function detectTaskType(text) {
   return 'general';
 }
 
+/**
+ * Suggest a smaller local model when downloads fail due to rate limits or device constraints.
+ * @param {string} modelId
+ * @param {{isRateLimit?: boolean, isStorage?: boolean, deviceMemory?: number}} [options]
+ * @returns {string|null}
+ */
+export function recommendLocalModelFallback(modelId, options = {}) {
+  const current = String(modelId || '');
+  const { isRateLimit = false, isStorage = false, deviceMemory } = options;
+
+  if (!current || current.includes('SmolLM2')) {
+    return null;
+  }
+
+  if (isStorage || (typeof deviceMemory === 'number' && deviceMemory > 0 && deviceMemory < 4)) {
+    return 'SmolLM2-360M-Instruct-q4f16_1-MLC';
+  }
+
+  if (current.includes('Phi')) {
+    return isRateLimit ? 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC' : 'Llama-3.2-1B-Instruct-q4f16_1-MLC';
+  }
+
+  if (current.includes('Llama')) {
+    return 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
+  }
+
+  if (current.includes('Qwen')) {
+    return 'SmolLM2-360M-Instruct-q4f16_1-MLC';
+  }
+
+  return 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
+}
+
 function buildTaskModeGuidance(text) {
   const taskType = detectTaskType(text);
 
