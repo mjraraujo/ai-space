@@ -4,6 +4,7 @@ import {
   extractWebQuery,
   isFactualQuestion,
   detectTaskType,
+  recommendLocalModelFallback,
   buildEnhancedQuery,
   sanitizeModelOutput,
   looksLikeLegacyRuntimeScript,
@@ -138,6 +139,22 @@ describe('detectTaskType', () => {
 
   it('detects verification/review requests', () => {
     expect(detectTaskType('review this answer and verify it before I send')).toBe('verify');
+  });
+});
+
+// ─── recommendLocalModelFallback ────────────────────────────────────────────
+
+describe('recommendLocalModelFallback', () => {
+  it('falls back from Llama to Qwen on rate limits', () => {
+    expect(recommendLocalModelFallback('Llama-3.2-1B-Instruct-q4f16_1-MLC', { isRateLimit: true })).toBe('Qwen2.5-0.5B-Instruct-q4f16_1-MLC');
+  });
+
+  it('falls back to SmolLM when storage is tight', () => {
+    expect(recommendLocalModelFallback('Phi-3.5-mini-instruct-q4f16_1-MLC', { isStorage: true })).toBe('SmolLM2-360M-Instruct-q4f16_1-MLC');
+  });
+
+  it('returns null when already on the smallest model', () => {
+    expect(recommendLocalModelFallback('SmolLM2-360M-Instruct-q4f16_1-MLC', { isRateLimit: true })).toBeNull();
   });
 });
 
