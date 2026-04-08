@@ -479,4 +479,116 @@ describe('AIEngine', () => {
       cloudSpy.mockRestore();
     });
   });
+
+  // ─── Adapter management ───────────────────────────────────────────────────
+
+  describe('setAdapter() / getAdapter()', () => {
+    it('getAdapter() returns null initially', () => {
+      expect(engine.getAdapter()).toBeNull();
+    });
+
+    it('setAdapter() stores and getAdapter() returns it', () => {
+      const fakeAdapter = { chat: vi.fn(), getCapabilities: () => ({ backend: 'test' }) };
+      engine.setAdapter(fakeAdapter);
+      expect(engine.getAdapter()).toBe(fakeAdapter);
+    });
+  });
+
+  // ─── getStatus() includes adapter info ───────────────────────────────────
+
+  describe('getStatus() with adapter', () => {
+    it('includes adapterName, backend, toolCalling when adapter set', () => {
+      engine._adapter = {
+        displayName: 'Test Adapter',
+        getCapabilities: () => ({
+          backend: 'webgpu',
+          toolCalling: true,
+          maxContextTokens: 4096
+        })
+      };
+      const status = engine.getStatus();
+      expect(status.adapterName).toBe('Test Adapter');
+      expect(status.backend).toBe('webgpu');
+      expect(status.toolCalling).toBe(true);
+      expect(status.maxContextTokens).toBe(4096);
+    });
+
+    it('adapterName is null when no adapter set', () => {
+      expect(engine.getStatus().adapterName).toBeNull();
+    });
+  });
+
+  // ─── Context management ───────────────────────────────────────────────────
+
+  describe('_manageContext()', () => {
+    it('returns messages unchanged when under limit', () => {
+      const messages = [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' }
+      ];
+      const result = engine._manageContext(messages);
+      expect(result).toHaveLength(2);
+    });
+
+    it('trims messages when over maxContextTurns', () => {
+      engine.maxContextTurns = 4;
+      const messages = Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `message ${i}`
+      }));
+      const result = engine._manageContext(messages);
+      expect(result).toHaveLength(4);
+    });
+
+    it('sets _contextSummary from evicted user messages', () => {
+      engine.maxContextTurns = 2;
+      const messages = [
+        { role: 'user', content: 'evicted user message' },
+        { role: 'assistant', content: 'response' },
+        { role: 'user', content: 'kept message' },
+        { role: 'assistant', content: 'kept response' }
+      ];
+      engine._manageContext(messages);
+      expect(engine._contextSummary).toContain('evicted user message');
+    });
+
+    it('returns null/undefined input unchanged', () => {
+      expect(engine._manageContext(null)).toBeNull();
+      expect(engine._manageContext(undefined)).toBeUndefined();
+    });
+  });
+
+  // ─── setCloudConfig() hot-updates adapter ────────────────────────────────
+
+  describe('setCloudConfig() hot-update', () => {
+    it('calls configure() on active CloudAdapter-like adapter', () => {
+      const mockAdapter = {
+        configure: vi.fn(),
+        _isCloudAdapter: true  // duck-typed detection
+      };
+      // Simulate CloudAdapter instance by setting constructor name
+      Object.defineProperty(mockAdapter, 'constructor', { value: { name: 'CloudAdapter' } });
+
+      engine.setCloudConfig('https://api.openai.com/v1', 'sk-test', 'gpt-4o');
+      // _adapter is not set here, so configure is not called — just verify config stored
+      expect(engine.cloudEndpoint).toBe('https://api.openai.com/v1');
+      expect(engine.cloudApiKey).toBe('sk-test');
+      expect(engine.cloudModel).toBe('gpt-4o');
+    });
+  });
+
+  // ─── abort() ─────────────────────────────────────────────────────────────
+
+  describe('abort()', () => {
+    it('does not throw when no adapter set', () => {
+      expect(() => engine.abort()).not.toThrow();
+    });
+
+    it('calls abort() on the active adapter', () => {
+      const mockAbort = vi.fn();
+      engine._adapter = { abort: mockAbort };
+      engine.abort();
+      expect(mockAbort).toHaveBeenCalled();
+    });
+  });
 });

@@ -1,7 +1,12 @@
 /**
  * Relay Hub - Unified relay + artifact preset builder
  * Supports local-first control prompts for: shortcuts, browser, device
+ *
+ * Also exposes relay actions as typed ToolDef objects so the AI engine
+ * can invoke relay capabilities through the function-calling protocol.
  */
+
+// ─── Relay types ──────────────────────────────────────────────────────────────
 
 const RELAYS = {
   shortcuts: {
@@ -150,5 +155,68 @@ export class RelayHub {
       'Input payload:',
       JSON.stringify(envelope, null, 2)
     ].filter(Boolean).join('\n');
+  }
+
+  /**
+   * Get all relay actions as OpenAI-compatible tool definitions.
+   * These can be passed to the AI engine's tools[] parameter to allow
+   * the model to invoke relay capabilities via function-calling.
+   *
+   * Each tool is prefixed with `relay_` to namespace it clearly.
+   *
+   * @param {string} [relayId] - Filter to a specific relay; all relays if omitted
+   * @returns {import('./model-adapter.js').ToolDef[]}
+   */
+  getToolDefs(relayId) {
+    const actions = relayId
+      ? Object.values(ACTIONS).filter((a) => a.relays.includes(relayId))
+      : Object.values(ACTIONS);
+
+    return actions.map((action) => ({
+      type: 'function',
+      function: {
+        name: `relay_${action.id}`,
+        description: `[Relay action] ${action.intent} Supported on: ${action.relays.join(', ')}.`,
+        parameters: {
+          type: 'object',
+          properties: {
+            relay: {
+              type: 'string',
+              enum: action.relays,
+              description: 'Target relay type'
+            },
+            content: {
+              type: 'string',
+              description: 'The content or payload to process'
+            },
+            provider: {
+              type: 'string',
+              enum: Object.keys(PROVIDER_PRESETS),
+              description: 'Output style preset'
+            }
+          },
+          required: ['relay', 'content']
+        }
+      }
+    }));
+  }
+
+  /**
+   * Build a relay artifact prompt from a tool call invocation.
+   * Called by ToolRunner when the AI invokes a relay_ tool.
+   *
+   * @param {string} toolName - e.g. 'relay_summarize'
+   * @param {object} args     - { relay, content, provider }
+   * @returns {string} prompt to feed back into the conversation
+   */
+  buildPromptFromToolCall(toolName, args) {
+    const actionId = String(toolName || '').replace(/^relay_/, '');
+    const { relay: relayId, content, provider: providerId } = args || {};
+    return this.buildArtifactPrompt({
+      relayId: relayId || 'device',
+      actionId: actionId || 'summarize',
+      providerId: providerId || 'local',
+      content: content || ''
+    });
   }
 }
