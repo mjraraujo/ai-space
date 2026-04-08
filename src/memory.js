@@ -249,6 +249,13 @@ export class Memory {
     return this._getAll('conversations');
   }
 
+  /**
+   * Delete a conversation from the **legacy** `conversations` store.
+   * For conversations stored via the new `chat_history` store (see
+   * saveChatHistory / getConversations / loadConversation), use
+   * deleteChatHistory(id) instead.  Callers that need to clean both stores
+   * (e.g. when the user deletes from the sidebar) should call both methods.
+   */
   async deleteConversation(id) {
     return this._delete('conversations', id);
   }
