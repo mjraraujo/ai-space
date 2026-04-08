@@ -185,7 +185,9 @@ export class AIEngine {
 
         // Dispose existing adapter if model changed
         if (this._adapter instanceof WebLLMAdapter) {
-          await this._adapter.dispose().catch(() => {});
+          await this._adapter.dispose().catch((err) => {
+            console.warn('[AIEngine] adapter disposal error:', err);
+          });
         }
 
         const adapter = new WebLLMAdapter();
@@ -345,7 +347,13 @@ export class AIEngine {
     }
 
     const systemContent = SYSTEM_PROMPT + (this.promptContext || '');
-    const isAnthropic = this.cloudEndpoint.toLowerCase().includes('api.anthropic.com');
+
+    // Use exact hostname comparison to avoid partial-match spoofing
+    let endpointHostname = '';
+    try {
+      endpointHostname = new URL(this.cloudEndpoint).hostname.toLowerCase();
+    } catch {}
+    const isAnthropic = endpointHostname === 'api.anthropic.com';
 
     if (isAnthropic) {
       return this._chatAnthropic(messages, systemContent, onToken);

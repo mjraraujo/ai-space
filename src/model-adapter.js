@@ -71,22 +71,22 @@ export class ModelAdapter {
 
   /**
    * Load / connect to the model. Resolves when the adapter is ready to chat.
-   * @param {string} modelId
-   * @param {(progress: LoadProgress) => void} [onProgress]
+   * @param {string} _modelId
+   * @param {(progress: LoadProgress) => void} [_onProgress]
    * @returns {Promise<void>}
    */
-  async init(modelId, onProgress) { // eslint-disable-line no-unused-vars
+  async init(_modelId, _onProgress) {
     throw new Error('ModelAdapter.init() not implemented');
   }
 
   /**
    * Generate a response. Streams tokens via onToken when provided.
-   * @param {ChatMessage[]} messages
-   * @param {(token: string, accumulated: string) => void} [onToken]
-   * @param {ChatOptions} [options]
+   * @param {ChatMessage[]} _messages
+   * @param {(token: string, accumulated: string) => void} [_onToken]
+   * @param {ChatOptions} [_options]
    * @returns {Promise<string>} full response text
    */
-  async chat(messages, onToken, options) { // eslint-disable-line no-unused-vars
+  async chat(_messages, _onToken, _options) {
     throw new Error('ModelAdapter.chat() not implemented');
   }
 
@@ -668,11 +668,16 @@ export class CloudAdapter extends ModelAdapter {
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
   _detectProvider(endpoint) {
-    const url = (endpoint || '').toLowerCase();
-    if (url.includes('api.anthropic.com')) return 'anthropic';
-    if (url.includes('api.openai.com')) return 'openai';
-    if (url.includes('generativelanguage.googleapis.com')) return 'gemini';
-    if (url.includes('api.groq.com')) return 'groq';
+    let hostname = '';
+    try {
+      hostname = new URL(endpoint || '').hostname.toLowerCase();
+    } catch {
+      return 'custom';
+    }
+    if (hostname === 'api.anthropic.com') return 'anthropic';
+    if (hostname === 'api.openai.com') return 'openai';
+    if (hostname === 'generativelanguage.googleapis.com') return 'gemini';
+    if (hostname === 'api.groq.com') return 'groq';
     return 'custom';
   }
 

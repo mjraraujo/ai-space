@@ -57,39 +57,39 @@ export class SkillProvider {
 
   /**
    * Called once when the skill is activated / registered.
-   * @param {SkillContext} ctx
+   * @param {SkillContext} _ctx
    * @returns {Promise<void>}
    */
-  async onActivate(ctx) {} // eslint-disable-line no-unused-vars
+  async onActivate(_ctx) {}
 
   /**
    * Determine if this skill should handle the current user input.
    * Return true to claim the message; AIEngine will call execute() instead of bare LLM.
-   * @param {string} userInput
-   * @param {SkillContext} ctx
+   * @param {string} _userInput
+   * @param {SkillContext} _ctx
    * @returns {Promise<boolean>}
    */
-  async shouldHandle(userInput, ctx) { // eslint-disable-line no-unused-vars
+  async shouldHandle(_userInput, _ctx) {
     return false;
   }
 
   /**
    * Execute the skill's primary action.
-   * @param {string} userInput
-   * @param {SkillContext} ctx
+   * @param {string} _userInput
+   * @param {SkillContext} _ctx
    * @returns {Promise<SkillResult>}
    */
-  async execute(userInput, ctx) { // eslint-disable-line no-unused-vars
+  async execute(_userInput, _ctx) {
     throw new Error('SkillProvider.execute() not implemented');
   }
 
   /**
    * Handle a tool-call result returned by the model.
-   * @param {import('./model-adapter.js').ToolCall} toolCall
-   * @param {SkillContext} ctx
+   * @param {import('./model-adapter.js').ToolCall} _toolCall
+   * @param {SkillContext} _ctx
    * @returns {Promise<string>}
    */
-  async handleToolCall(toolCall, ctx) { // eslint-disable-line no-unused-vars
+  async handleToolCall(_toolCall, _ctx) {
     return '';
   }
 
@@ -124,7 +124,11 @@ export class SkillRegistry {
   async unregister(id) {
     const skill = this._skills.get(id);
     if (skill) {
-      await skill.onDeactivate().catch(() => {});
+      try {
+        await skill.onDeactivate();
+      } catch (err) {
+        console.warn(`SkillRegistry: cleanup error for skill "${id}":`, err);
+      }
       this._skills.delete(id);
       this._disabled.delete(id);
     }
@@ -253,11 +257,13 @@ export class WorkflowStudioSkill extends SkillProvider {
   }
 
   async shouldHandle(userInput) {
+    // Matches: "create/build/draft/save/make/turn ... skill/workflow/runbook/routine/automation"
+    // or an explicit "workflow studio" invocation
     return /\b(create|build|draft|save|make|turn)\b.{0,30}\b(skill|workflow|runbook|routine|automation)\b/i.test(userInput)
       || /\bworkflow\s+studio\b/i.test(userInput);
   }
 
-  async execute(userInput, ctx) {
+  async execute(userInput, _ctx) {
     const { draftSkillFromText } = await import('./skill-studio.js');
     const draft = draftSkillFromText(userInput);
 
@@ -302,6 +308,8 @@ export class WebExtractorSkill extends SkillProvider {
   }
 
   async shouldHandle(userInput) {
+    // Matches explicit URL share (https://...) or phrases like
+    // "summarize this article from the site", "open this link", etc.
     return /https?:\/\/\S+/.test(userInput)
       || /\b(summarize|extract|analyse|analyze|read|parse|scrape|open|visit|article)\b.{0,40}\b(url|link|page|site|article|post)\b/i.test(userInput);
   }
@@ -359,6 +367,7 @@ export class MorningBriefingSkill extends SkillProvider {
   }
 
   async shouldHandle(userInput) {
+    // Matches phrases like: "morning briefing", "brief me", "today's plan/summary/schedule"
     return /\b(morning\s+briefing|daily\s+brief|brief\s+me|my\s+day|today\'s\s+(plan|summary|schedule))\b/i.test(userInput);
   }
 
@@ -400,6 +409,8 @@ export class ReplyDrafterSkill extends SkillProvider {
   }
 
   async shouldHandle(userInput) {
+    // Matches: "draft/write/compose a reply/response/email/message"
+    // or "reply to/for [something]"
     return /\b(draft|write|compose)\s+(a\s+)?(reply|response|email|message)\b/i.test(userInput)
       || /\breply\s+(to|for)\b/i.test(userInput);
   }

@@ -71,7 +71,7 @@ export class ToolRunner extends RuntimeAgent {
 
   /**
    * Unregister a tool.
-   * @param {string} name
+   * @param {string} name - Tool name to remove
    */
   unregisterTool(name) {
     this._tools.delete(name);

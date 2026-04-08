@@ -436,7 +436,8 @@ export class BrowserModelLoader {
         if (this._opfsRoot) {
           try {
             const dir = await this._opfsRoot.getDirectoryHandle(id, { create: false });
-            for await (const _ of dir.keys()) shards++; // eslint-disable-line no-unused-vars
+            // Count entries: each shard + 1 'complete' marker
+            for await (const _entry of dir.keys()) shards++;
           } catch {}
         }
         return { id, shards: Math.max(0, shards - 1) }; // exclude the 'complete' marker
