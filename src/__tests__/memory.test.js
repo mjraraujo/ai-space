@@ -165,10 +165,10 @@ describe('_encrypt / _decrypt', () => {
   });
 
   it('round-trips with a second independent key', async () => {
-    const mem2 = await buildMemory();
+    const memWithDifferentKey = await buildMemory();
     const enc  = await mem._encrypt({ secret: 'abc' });
     // Different key — should fail to decrypt
-    await expect(mem2._decrypt(enc)).rejects.toThrow();
+    await expect(memWithDifferentKey._decrypt(enc)).rejects.toThrow();
   });
 });
 
