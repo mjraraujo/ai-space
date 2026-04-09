@@ -537,7 +537,7 @@ describe('AIEngine', () => {
         content: `message ${i}`
       }));
       const result = engine._manageContext(messages);
-      expect(result).toHaveLength(4);
+      expect(result.length).toBeLessThanOrEqual(4);
     });
 
     it('sets _contextSummary from evicted user messages', () => {
@@ -555,6 +555,44 @@ describe('AIEngine', () => {
     it('returns null/undefined input unchanged', () => {
       expect(engine._manageContext(null)).toBeNull();
       expect(engine._manageContext(undefined)).toBeUndefined();
+    });
+
+    it('trims by token budget even when under maxContextTurns', () => {
+      // Attach a mock adapter reporting a tiny context window (512 tokens)
+      engine._adapter = { getCapabilities: () => ({ maxContextTokens: 512 }) };
+      // Each message is 300 chars ≈ 75 tokens; two of them would fit but three exceed budget
+      const longContent = 'x'.repeat(300);
+      const messages = [
+        { role: 'user', content: longContent },
+        { role: 'assistant', content: longContent },
+        { role: 'user', content: longContent }
+      ];
+      // maxContextTurns is still 20, so the old code would keep all 3
+      const result = engine._manageContext(messages);
+      expect(result.length).toBeLessThan(3);
+    });
+
+    it('always keeps at least the most recent message even if it alone is over budget', () => {
+      engine._adapter = { getCapabilities: () => ({ maxContextTokens: 512 }) };
+      // One enormous message that far exceeds any budget
+      const hugeContent = 'y'.repeat(10000);
+      const messages = [{ role: 'user', content: hugeContent }];
+      const result = engine._manageContext(messages);
+      expect(result).toHaveLength(1);
+    });
+
+    it('truncates a single oversized message and appends a notice', () => {
+      engine._adapter = { getCapabilities: () => ({ maxContextTokens: 512 }) };
+      const hugeContent = 'z'.repeat(10000);
+      const messages = [{ role: 'user', content: hugeContent }];
+      const result = engine._manageContext(messages);
+      expect(result[0].content).toContain('[Content truncated to fit context window]');
+      expect(result[0].content.length).toBeLessThan(hugeContent.length);
+    });
+
+    it('returns an empty array unchanged', () => {
+      const result = engine._manageContext([]);
+      expect(result).toEqual([]);
     });
   });
 
