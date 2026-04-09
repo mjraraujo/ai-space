@@ -19,8 +19,8 @@ describe('AIEngine', () => {
       expect(AIEngine.getDefaultModelId()).toBe('Llama-3.2-1B-Instruct-q4f16_1-MLC');
     });
 
-    it('contains exactly 4 models', () => {
-      expect(Object.keys(AIEngine.getModels())).toHaveLength(4);
+    it('contains exactly 5 models', () => {
+      expect(Object.keys(AIEngine.getModels())).toHaveLength(5);
     });
 
     it('includes SmolLM2 360M', () => {
