@@ -94,6 +94,10 @@ export function recommendLocalModelFallback(modelId, options = {}) {
     return 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
   }
 
+  if (current.includes('Qwen2.5-1.5B')) {
+    return 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
+  }
+
   if (current.includes('Qwen')) {
     return 'SmolLM2-360M-Instruct-q4f16_1-MLC';
   }

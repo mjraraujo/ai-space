@@ -528,10 +528,25 @@ async function fetchLocalInternetContext(query) {
     const page = Object.values(extractData?.query?.pages || {})[0];
     const extract = String(page?.extract || '').slice(0, 500).trim();
 
-    return extract ? `Factual context from Wikipedia:\n${extract}` : '';
+    if (extract) return `Factual context from Wikipedia:\n${extract}`;
   } catch {
-    return '';
+    // fall through to DuckDuckGo
   }
+
+  // Fallback: DuckDuckGo Instant Answer API (free, CORS-open)
+  try {
+    const ddgUrl = `https://api.duckduckgo.com/?q=${search}&format=json&no_html=1&skip_disambig=1`;
+    const ddgRes = await fetch(ddgUrl, { method: 'GET' });
+    if (ddgRes.ok) {
+      const ddgData = await ddgRes.json();
+      const abstract = String(ddgData?.AbstractText || '').slice(0, 400).trim();
+      if (abstract) return `Factual context from DuckDuckGo:\n${abstract}`;
+    }
+  } catch {
+    // ignore
+  }
+
+  return '';
 }
 
 /**
@@ -1851,6 +1866,38 @@ async function checkModelDownloadCapacity(modelId) {
 /**
  * Send a message and get AI response
  */
+async function runInference(modelMessages, { modelId = '', isCloud = false } = {}) {
+  ui.renderMessage('assistant', '', true);
+  let fullResponse = '';
+  await engine.chat(modelMessages, (token, accumulated) => {
+    fullResponse = accumulated;
+    ui.updateStreamingMessage(accumulated);
+  }, { tools: skillRegistry.collectToolDefs() });
+
+  fullResponse = sanitizeModelOutput(fullResponse);
+  ui.updateStreamingMessage(fullResponse);
+  ui.finalizeStreamingMessage();
+  state.messages.push({ role: 'assistant', content: fullResponse });
+
+  if (pendingShortcutActions.length > 0) {
+    const actions = [...pendingShortcutActions];
+    pendingShortcutActions = [];
+    ui.addActionChips(actions, (actionText) => {
+      const inputEl = document.getElementById('chat-input');
+      if (!inputEl) return;
+      inputEl.value = actionText;
+      ui.autoResizeInput();
+      ui.setSendEnabled(true);
+    });
+  }
+
+  if (isCloud) {
+    await auditLog('suggestion', { model: modelId, responseLength: fullResponse.length, cloud: true });
+  } else {
+    await auditLog('suggestion', { model: modelId, responseLength: fullResponse.length });
+  }
+}
+
 async function sendMessage(text) {
   if (state.isGenerating) return;
 
@@ -1894,7 +1941,7 @@ async function sendMessage(text) {
       });
       appendRuntimeOutput('Factual web context attached to current request.');
       await auditLog('internet_consult', {
-        source: 'wikipedia-extract',
+        source: 'web-extract',
         queryLength: text.length,
         autoTriggered: factualQuery && !state.localInternetAssist
       });
@@ -1926,47 +1973,30 @@ async function sendMessage(text) {
     return;
   }
 
+  // Skills intercept first — works regardless of local/cloud mode
+  const localSkill = await tryHandleLocalFeatureSkill(text);
+  if (localSkill?.handled) {
+    const responseText = localSkill.response || 'Local skill executed.';
+    ui.renderMessage('assistant', responseText);
+    state.messages.push({ role: 'assistant', content: responseText });
+    if (memoryReady) {
+      try {
+        await memory.saveChatHistory(state.conversationId, state.messages);
+        await memory.savePreference('last_conversation_id', state.conversationId);
+      } catch {}
+    }
+    state.isGenerating = false;
+    const inputEl = document.getElementById('chat-input');
+    if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
+    return;
+  }
+
   if (canLocal) {
     // Local inference
     ui.showTyping(true);
     try {
-      const localSkill = await tryHandleLocalFeatureSkill(text);
-      if (localSkill?.handled) {
-        ui.showTyping(false);
-        const responseText = localSkill.response || 'Local skill executed.';
-        ui.renderMessage('assistant', responseText);
-        state.messages.push({ role: 'assistant', content: responseText });
-        state.isGenerating = false;
-        const inputEl = document.getElementById('chat-input');
-        if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
-        return;
-      }
-
       ui.showTyping(false);
-      ui.renderMessage('assistant', '', true);
-
-      let fullResponse = '';
-      await engine.chat(modelMessages, (token, accumulated) => {
-        fullResponse = accumulated;
-        ui.updateStreamingMessage(accumulated);
-      }, { tools: skillRegistry.collectToolDefs() });
-
-      fullResponse = sanitizeModelOutput(fullResponse);
-      ui.updateStreamingMessage(fullResponse);
-      ui.finalizeStreamingMessage();
-      state.messages.push({ role: 'assistant', content: fullResponse });
-      if (pendingShortcutActions.length > 0) {
-        const actions = [...pendingShortcutActions];
-        pendingShortcutActions = [];
-        ui.addActionChips(actions, (actionText) => {
-          const inputEl = document.getElementById('chat-input');
-          if (!inputEl) return;
-          inputEl.value = actionText;
-          ui.autoResizeInput();
-          ui.setSendEnabled(true);
-        });
-      }
-      await auditLog('suggestion', { model: engineStatus.modelId, responseLength: fullResponse.length });
+      await runInference(modelMessages, { modelId: engineStatus.modelId });
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
@@ -1980,30 +2010,7 @@ async function sendMessage(text) {
     await auditLog('cloud_call', { endpoint: engine.cloudEndpoint, model: engine.cloudModel });
     try {
       ui.showTyping(false);
-      ui.renderMessage('assistant', '', true);
-
-      let fullResponse = '';
-      await engine.chat(modelMessages, (token, accumulated) => {
-        fullResponse = accumulated;
-        ui.updateStreamingMessage(accumulated);
-      }, { tools: skillRegistry.collectToolDefs() });
-
-      fullResponse = sanitizeModelOutput(fullResponse);
-      ui.updateStreamingMessage(fullResponse);
-      ui.finalizeStreamingMessage();
-      state.messages.push({ role: 'assistant', content: fullResponse });
-      if (pendingShortcutActions.length > 0) {
-        const actions = [...pendingShortcutActions];
-        pendingShortcutActions = [];
-        ui.addActionChips(actions, (actionText) => {
-          const inputEl = document.getElementById('chat-input');
-          if (!inputEl) return;
-          inputEl.value = actionText;
-          ui.autoResizeInput();
-          ui.setSendEnabled(true);
-        });
-      }
-      await auditLog('suggestion', { model: engine.cloudModel, responseLength: fullResponse.length, cloud: true });
+      await runInference(modelMessages, { modelId: engine.cloudModel, isCloud: true });
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
@@ -2272,6 +2279,8 @@ async function handleLoadConversation(id) {
  */
 async function handleDeleteConversation(id) {
   if (!memoryReady) return;
+
+  if (!window.confirm('Delete this conversation? This cannot be undone.')) return;
 
   try {
     await memory.deleteChatHistory(id);
@@ -2936,6 +2945,7 @@ async function restoreLastConversation() {
         for (const msg of conv.messages) {
           ui.renderMessage(msg.role, msg.content, false, msg.image || null);
         }
+        ui._scrollToBottom();
       }
       console.log(`[ai-space] restored conversation: ${conv.messages.length} messages`);
     }

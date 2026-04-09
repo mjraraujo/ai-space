@@ -115,6 +115,13 @@ export const WEB_LLM_MODELS = {
     quantization: 'q4f16_1',
     maxContextTokens: 8192
   },
+  'Qwen2.5-1.5B-Instruct-q4f16_1-MLC': {
+    name: 'Qwen 2.5 1.5B',
+    size: '900 MB',
+    description: 'Better quality than 0.5B, lighter than Llama 1B. Great middle ground.',
+    quantization: 'q4f16_1',
+    maxContextTokens: 8192
+  },
   'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': {
     name: 'Qwen 2.5 0.5B',
     size: '350 MB',
