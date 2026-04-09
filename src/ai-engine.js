@@ -58,6 +58,20 @@ const SYSTEM_PROMPT = `You are AI Space — a precise, honest, and highly capabl
 - Never claim to be GPT, Phi, Claude, or any other model by name.
 - If you receive a SYSTEM message beginning with [WEB_CONTEXT], treat it as turn-specific context and do not pretend to have full browsing access.`;
 
+// ─── Context management constants ────────────────────────────────────────────
+
+/** Fallback context window size (tokens) when the adapter reports none. */
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 4096;
+
+/** Tokens reserved for the model's own response within the context budget. */
+const RESPONSE_RESERVE_TOKENS = 512;
+
+/** Minimum token floor to avoid truncating to zero when the budget is tiny. */
+const MIN_TOKEN_FLOOR = 100;
+
+/** Approximate characters per token for budget estimation (conservative). */
+const CHARS_PER_TOKEN = 4;
+
 export class AIEngine {
   constructor() {
     // ─── Adapter layer (new) ──────────────────────────────────────────────
@@ -241,12 +255,65 @@ export class AIEngine {
    * @returns {Array} trimmed messages
    */
   _manageContext(messages) {
-    if (!messages || messages.length <= this.maxContextTurns) return messages;
+    if (!messages || messages.length === 0) return messages;
 
-    const evicted = messages.slice(0, messages.length - this.maxContextTurns);
-    const kept = messages.slice(messages.length - this.maxContextTurns);
+    // ── Token-aware trimming ─────────────────────────────────────────────────
+    // Rough estimate: CHARS_PER_TOKEN characters per token (conservative for mixed content).
+    const estimateTokens = (text) =>
+      Math.ceil((typeof text === 'string' ? text : '').length / CHARS_PER_TOKEN);
 
-    // Build a one-line summary of evicted turns
+    // Tokens reserved for the system prompt, any existing summary, and the
+    // model's own response.  Use the adapter's reported limit when available.
+    const maxContextTokens =
+      this._adapter?.getCapabilities?.()?.maxContextTokens || DEFAULT_CONTEXT_WINDOW_TOKENS;
+    const systemTokens = estimateTokens(
+      SYSTEM_PROMPT + (this.promptContext || '') + (this._contextSummary || '')
+    );
+    const availableTokens = maxContextTokens - systemTokens - RESPONSE_RESERVE_TOKENS;
+
+    // Walk from newest → oldest, accumulate token cost, stop when budget full.
+    let usedTokens = 0;
+    let keepFrom = 0; // keep everything by default
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msgTokens = estimateTokens(
+        typeof messages[i].content === 'string' ? messages[i].content : ''
+      );
+      if (usedTokens + msgTokens > availableTokens) {
+        keepFrom = i + 1;
+        break;
+      }
+      usedTokens += msgTokens;
+    }
+
+    // Also honour the maximum-turn ceiling.
+    const turnFloor = Math.max(0, messages.length - this.maxContextTurns);
+    keepFrom = Math.max(keepFrom, turnFloor);
+
+    // Always keep at least the most recent message so the model has something
+    // to respond to.  If that single message is over-budget, truncate it.
+    if (keepFrom >= messages.length) {
+      const lastMsg = messages[messages.length - 1];
+      const maxChars = Math.max(availableTokens, MIN_TOKEN_FLOOR) * CHARS_PER_TOKEN;
+      if (typeof lastMsg.content === 'string' && lastMsg.content.length > maxChars) {
+        return [
+          {
+            ...lastMsg,
+            content:
+              lastMsg.content.slice(0, maxChars) +
+              '\n[Content truncated to fit context window]'
+          }
+        ];
+      }
+      return [lastMsg];
+    }
+
+    // Nothing evicted — return as-is.
+    if (keepFrom === 0) return messages;
+
+    const evicted = messages.slice(0, keepFrom);
+    const kept = messages.slice(keepFrom);
+
+    // Build a one-line summary of evicted turns so the model retains context.
     const evictedSummary = evicted
       .filter((m) => m.role === 'user')
       .map((m) => (typeof m.content === 'string' ? m.content.slice(0, 80) : ''))
