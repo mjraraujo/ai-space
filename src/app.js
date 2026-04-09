@@ -11,7 +11,8 @@ import { Voice } from './voice.js';
 import { Camera } from './camera.js';
 import { deviceAuthFlow, getAuthIssuer, getClientIdOverride, setClientIdOverride, clearClientIdOverride } from './codex-auth.js';
 import { RelayHub } from './relays.js';
-import { RuntimeAgent } from './runtime-agent.js';
+import { ToolRunner } from './tool-runner.js';
+import { createDefaultRegistry } from './skill-registry.js';
 import { SkillStudio } from './skill-studio.js';
 import {
   isWebLookupIntent,
@@ -43,7 +44,9 @@ const memory = new Memory();
 const audit = new Audit();
 const shortcuts = new Shortcuts();
 const relays = new RelayHub();
-const runtimeAgent = new RuntimeAgent();
+const toolRunner = new ToolRunner();
+toolRunner.registerBuiltIns();
+const skillRegistry = createDefaultRegistry();
 const skillStudio = new SkillStudio();
 const voice = new Voice();
 const camera = new Camera();
@@ -126,7 +129,7 @@ function appendLiveActivityLog(line) {
 
 function detectRuntimePresetFromText(text) {
   const t = String(text || '').toLowerCase();
-  const presets = RuntimeAgent.getPresets();
+  const presets = ToolRunner.getPresets();
 
   const exact = presets.find((p) => t.includes(p.id.toLowerCase()));
   if (exact) return exact;
@@ -293,7 +296,7 @@ function runRuntimeSkill(script, runtimeModeForRun) {
       finish({ ok: false, message: 'Runtime timed out.' });
     }, 30000);
 
-    activeRuntimeJobId = runtimeAgent.run(script, {
+    activeRuntimeJobId = toolRunner.run(script, {
       onLog: ({ text }) => appendRuntimeOutput(text),
       onStatus: ({ status, url }) => {
         if (status === 'navigate' && url) {
@@ -326,6 +329,24 @@ function runRuntimeSkill(script, runtimeModeForRun) {
 }
 
 async function tryHandleLocalFeatureSkill(userText) {
+  // First, try the SkillRegistry — any registered skill that claims this input
+  // takes priority over the lower-level DSL intent parser.
+  const skillCtx = {
+    conversationId: state.conversationId,
+    messages: state.messages,
+    memory: memoryReady ? memory : null,
+    audit
+  };
+  const matchedSkill = await skillRegistry.route(userText, skillCtx);
+  if (matchedSkill) {
+    const result = await matchedSkill.execute(userText, skillCtx);
+    if (result?.handled) {
+      return { handled: true, response: result.content || '' };
+    }
+    // Skill returned a non-handled result (e.g. artifact only); fall through
+    // so the LLM still generates a response, but the artifact is already set.
+  }
+
   const intent = parseLocalSkillIntent(userText);
   if (!intent) return { handled: false };
 
@@ -334,7 +355,7 @@ async function tryHandleLocalFeatureSkill(userText) {
       return { handled: true, response: 'Runtime is not running right now.' };
     }
     openLiveActivity('Runtime Skill', 'Stopping...', 'running');
-    const cancelled = runtimeAgent.cancel(activeRuntimeJobId);
+    const cancelled = toolRunner.cancel(activeRuntimeJobId);
     activeRuntimeJobId = null;
     setRuntimeButtons(false);
     updateLiveActivityStatus(cancelled ? 'Stopped' : 'Stop failed', cancelled ? 'idle' : 'error');
@@ -372,7 +393,7 @@ async function tryHandleLocalFeatureSkill(userText) {
     }
 
     const preset = intent.preset;
-    const script = intent.customScript || preset?.script || RuntimeAgent.getPresets()[0]?.script || '';
+    const script = intent.customScript || preset?.script || ToolRunner.getPresets()[0]?.script || '';
     if (!script) {
       return { handled: true, response: 'No runtime script found to execute.' };
     }
@@ -507,10 +528,25 @@ async function fetchLocalInternetContext(query) {
     const page = Object.values(extractData?.query?.pages || {})[0];
     const extract = String(page?.extract || '').slice(0, 500).trim();
 
-    return extract ? `Factual context from Wikipedia:\n${extract}` : '';
+    if (extract) return `Factual context from Wikipedia:\n${extract}`;
   } catch {
-    return '';
+    // fall through to DuckDuckGo
   }
+
+  // Fallback: DuckDuckGo Instant Answer API (free, CORS-open)
+  try {
+    const ddgUrl = `https://api.duckduckgo.com/?q=${search}&format=json&no_html=1&skip_disambig=1`;
+    const ddgRes = await fetch(ddgUrl, { method: 'GET' });
+    if (ddgRes.ok) {
+      const ddgData = await ddgRes.json();
+      const abstract = String(ddgData?.AbstractText || '').slice(0, 400).trim();
+      if (abstract) return `Factual context from DuckDuckGo:\n${abstract}`;
+    }
+  } catch {
+    // ignore
+  }
+
+  return '';
 }
 
 /**
@@ -1437,7 +1473,7 @@ function populateRuntimeControls() {
     blank.textContent = 'Custom Script';
     presetEl.appendChild(blank);
 
-    RuntimeAgent.getPresets().forEach((preset) => {
+    ToolRunner.getPresets().forEach((preset) => {
       const opt = document.createElement('option');
       opt.value = preset.id;
       opt.textContent = preset.name;
@@ -1453,7 +1489,7 @@ function handleRuntimePresetChange() {
   if (!presetEl || !scriptEl) return;
 
   const presetId = presetEl.value;
-  const preset = RuntimeAgent.getPresets().find((p) => p.id === presetId);
+  const preset = ToolRunner.getPresets().find((p) => p.id === presetId);
 
   if (!preset) {
     if (hintEl) hintEl.textContent = 'Write DSL commands: LOG, RUN, WAIT, NAVIGATE, RETURN or RETURNJSON.';
@@ -1492,7 +1528,7 @@ async function handleRunRuntimeScript() {
   openLiveActivity('Runtime', 'Running in background', 'running');
   setRuntimeButtons(true);
 
-  activeRuntimeJobId = runtimeAgent.run(script, {
+  activeRuntimeJobId = toolRunner.run(script, {
     onLog: ({ text }) => appendRuntimeOutput(text),
     onStatus: ({ status, url }) => {
       if (status === 'navigate' && url) {
@@ -1551,7 +1587,7 @@ function handleStopRuntimeScript() {
   if (!activeRuntimeJobId) return;
 
   const hintEl = document.getElementById('runtime-hint');
-  const cancelled = runtimeAgent.cancel(activeRuntimeJobId);
+  const cancelled = toolRunner.cancel(activeRuntimeJobId);
   activeRuntimeJobId = null;
   setRuntimeButtons(false);
   if (cancelled) {
@@ -1830,6 +1866,38 @@ async function checkModelDownloadCapacity(modelId) {
 /**
  * Send a message and get AI response
  */
+async function runInference(modelMessages, { modelId = '', isCloud = false } = {}) {
+  ui.renderMessage('assistant', '', true);
+  let fullResponse = '';
+  await engine.chat(modelMessages, (token, accumulated) => {
+    fullResponse = accumulated;
+    ui.updateStreamingMessage(accumulated);
+  }, { tools: skillRegistry.collectToolDefs() });
+
+  fullResponse = sanitizeModelOutput(fullResponse);
+  ui.updateStreamingMessage(fullResponse);
+  ui.finalizeStreamingMessage();
+  state.messages.push({ role: 'assistant', content: fullResponse });
+
+  if (pendingShortcutActions.length > 0) {
+    const actions = [...pendingShortcutActions];
+    pendingShortcutActions = [];
+    ui.addActionChips(actions, (actionText) => {
+      const inputEl = document.getElementById('chat-input');
+      if (!inputEl) return;
+      inputEl.value = actionText;
+      ui.autoResizeInput();
+      ui.setSendEnabled(true);
+    });
+  }
+
+  if (isCloud) {
+    await auditLog('suggestion', { model: modelId, responseLength: fullResponse.length, cloud: true });
+  } else {
+    await auditLog('suggestion', { model: modelId, responseLength: fullResponse.length });
+  }
+}
+
 async function sendMessage(text) {
   if (state.isGenerating) return;
 
@@ -1873,7 +1941,7 @@ async function sendMessage(text) {
       });
       appendRuntimeOutput('Factual web context attached to current request.');
       await auditLog('internet_consult', {
-        source: 'wikipedia-extract',
+        source: 'web-extract',
         queryLength: text.length,
         autoTriggered: factualQuery && !state.localInternetAssist
       });
@@ -1905,47 +1973,30 @@ async function sendMessage(text) {
     return;
   }
 
+  // Skills intercept first — works regardless of local/cloud mode
+  const localSkill = await tryHandleLocalFeatureSkill(text);
+  if (localSkill?.handled) {
+    const responseText = localSkill.response || 'Local skill executed.';
+    ui.renderMessage('assistant', responseText);
+    state.messages.push({ role: 'assistant', content: responseText });
+    if (memoryReady) {
+      try {
+        await memory.saveChatHistory(state.conversationId, state.messages);
+        await memory.savePreference('last_conversation_id', state.conversationId);
+      } catch {}
+    }
+    state.isGenerating = false;
+    const inputEl = document.getElementById('chat-input');
+    if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
+    return;
+  }
+
   if (canLocal) {
     // Local inference
     ui.showTyping(true);
     try {
-      const localSkill = await tryHandleLocalFeatureSkill(text);
-      if (localSkill?.handled) {
-        ui.showTyping(false);
-        const responseText = localSkill.response || 'Local skill executed.';
-        ui.renderMessage('assistant', responseText);
-        state.messages.push({ role: 'assistant', content: responseText });
-        state.isGenerating = false;
-        const inputEl = document.getElementById('chat-input');
-        if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
-        return;
-      }
-
       ui.showTyping(false);
-      ui.renderMessage('assistant', '', true);
-
-      let fullResponse = '';
-      await engine.chat(modelMessages, (token, accumulated) => {
-        fullResponse = accumulated;
-        ui.updateStreamingMessage(accumulated);
-      });
-
-      fullResponse = sanitizeModelOutput(fullResponse);
-      ui.updateStreamingMessage(fullResponse);
-      ui.finalizeStreamingMessage();
-      state.messages.push({ role: 'assistant', content: fullResponse });
-      if (pendingShortcutActions.length > 0) {
-        const actions = [...pendingShortcutActions];
-        pendingShortcutActions = [];
-        ui.addActionChips(actions, (actionText) => {
-          const inputEl = document.getElementById('chat-input');
-          if (!inputEl) return;
-          inputEl.value = actionText;
-          ui.autoResizeInput();
-          ui.setSendEnabled(true);
-        });
-      }
-      await auditLog('suggestion', { model: engineStatus.modelId, responseLength: fullResponse.length });
+      await runInference(modelMessages, { modelId: engineStatus.modelId });
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
@@ -1959,30 +2010,7 @@ async function sendMessage(text) {
     await auditLog('cloud_call', { endpoint: engine.cloudEndpoint, model: engine.cloudModel });
     try {
       ui.showTyping(false);
-      ui.renderMessage('assistant', '', true);
-
-      let fullResponse = '';
-      await engine.chat(modelMessages, (token, accumulated) => {
-        fullResponse = accumulated;
-        ui.updateStreamingMessage(accumulated);
-      });
-
-      fullResponse = sanitizeModelOutput(fullResponse);
-      ui.updateStreamingMessage(fullResponse);
-      ui.finalizeStreamingMessage();
-      state.messages.push({ role: 'assistant', content: fullResponse });
-      if (pendingShortcutActions.length > 0) {
-        const actions = [...pendingShortcutActions];
-        pendingShortcutActions = [];
-        ui.addActionChips(actions, (actionText) => {
-          const inputEl = document.getElementById('chat-input');
-          if (!inputEl) return;
-          inputEl.value = actionText;
-          ui.autoResizeInput();
-          ui.setSendEnabled(true);
-        });
-      }
-      await auditLog('suggestion', { model: engine.cloudModel, responseLength: fullResponse.length, cloud: true });
+      await runInference(modelMessages, { modelId: engine.cloudModel, isCloud: true });
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
@@ -2251,6 +2279,8 @@ async function handleLoadConversation(id) {
  */
 async function handleDeleteConversation(id) {
   if (!memoryReady) return;
+
+  if (!window.confirm('Delete this conversation? This cannot be undone.')) return;
 
   try {
     await memory.deleteChatHistory(id);
@@ -2915,6 +2945,7 @@ async function restoreLastConversation() {
         for (const msg of conv.messages) {
           ui.renderMessage(msg.role, msg.content, false, msg.image || null);
         }
+        ui._scrollToBottom();
       }
       console.log(`[ai-space] restored conversation: ${conv.messages.length} messages`);
     }

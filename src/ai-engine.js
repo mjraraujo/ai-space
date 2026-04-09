@@ -1,40 +1,33 @@
 /**
- * AI Engine - WebGPU local inference via web-llm + Cloud mode
- * 
+ * AI Engine — unified adapter-based inference engine.
+ *
  * Modes:
- *   - local: WebGPU via web-llm (on-device inference)
- *   - cloud: fetch to user-configured OpenAI-compatible API endpoint
- *   - hybrid: local by default, cloud when user explicitly requests
- * 
- * Cloud calls are ONLY made when:
- *   1. Mode is 'cloud' or 'hybrid', AND
- *   2. User triggered the action
+ *   - local   : WebGPU via web-llm (on-device, zero network)
+ *   - ollama  : local Ollama server
+ *   - cloud   : OpenAI-compatible / Anthropic API
+ *   - hybrid  : local by default, cloud on forceCloud / fallback
+ *
+ * The Engine never talks to model backends directly — it routes through
+ * a ModelAdapter (WebLLMAdapter / OllamaAdapter / CloudAdapter).
+ * Skill routing, tool-calling, and KV-context management live here.
  */
 
-const DEFAULT_MODEL = 'Llama-3.2-1B-Instruct-q4f16_1-MLC';
+import {
+  WebLLMAdapter,
+  OllamaAdapter,
+  CloudAdapter,
+  WEB_LLM_MODELS,
+  DEFAULT_WEB_LLM_MODEL
+} from './model-adapter.js';
 
-const MODELS = {
-  'Llama-3.2-1B-Instruct-q4f16_1-MLC': {
-    name: 'Llama 3.2 1B',
-    size: '700 MB',
-    description: 'Best quality local reasoning. Recommended default.'
-  },
-  'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': {
-    name: 'Qwen 2.5 0.5B',
-    size: '350 MB',
-    description: 'Ultra-fast balance for everyday use.'
-  },
-  'SmolLM2-360M-Instruct-q4f16_1-MLC': {
-    name: 'SmolLM2 360M',
-    size: '200 MB',
-    description: 'Fastest option for lightweight tasks.'
-  },
-  'Phi-3.5-mini-instruct-q4f16_1-MLC': {
-    name: 'Phi 3.5 Mini 3.8B',
-    size: '2.2 GB',
-    description: 'Largest local model. Needs 4GB+ RAM.'
-  }
-};
+// ─── Keep legacy MODELS / DEFAULT_MODEL exports for backward compat ──────────
+const DEFAULT_MODEL = DEFAULT_WEB_LLM_MODEL;
+const MODELS = Object.fromEntries(
+  Object.entries(WEB_LLM_MODELS).map(([id, m]) => [
+    id,
+    { name: m.name, size: m.size, description: m.description }
+  ])
+);
 
 const SYSTEM_PROMPT = `You are AI Space — a precise, honest, and highly capable personal AI assistant running locally on your device.
 
@@ -67,27 +60,61 @@ const SYSTEM_PROMPT = `You are AI Space — a precise, honest, and highly capabl
 
 export class AIEngine {
   constructor() {
-    this.engine = null;
-    this.modelId = null;
-    this.status = 'idle'; // idle | loading | ready | error
-    this.webgpuAvailable = false;
-    this.mode = 'local'; // local | cloud | hybrid
+    // ─── Adapter layer (new) ──────────────────────────────────────────────
+    /** @type {import('./model-adapter.js').ModelAdapter|null} */
+    this._adapter = null;
 
-    // Cloud configuration
+    // ─── Backward-compat properties (kept so existing tests / app.js don't break) ──
+    this.engine = null;       // set to adapter when ready, for legacy checks
+    this.modelId = null;
+    this.status = 'idle';     // idle | loading | ready | error
+    this.webgpuAvailable = false;
+    this.mode = 'local';      // local | ollama | cloud | hybrid
+
+    // Cloud configuration (legacy path, still supported)
     this.cloudEndpoint = '';
     this.cloudApiKey = '';
     this.cloudModel = 'gpt-3.5-turbo';
 
     // Personalized prompt context from onboarding
     this.promptContext = '';
+
+    // ─── Context management ───────────────────────────────────────────────
+    /** Maximum number of conversation turns to keep in the live context window */
+    this.maxContextTurns = 20;
+    /** Compressed summary of evicted turns (KV-context pagination) */
+    this._contextSummary = '';
+
+    // ─── Active generation abort handle ──────────────────────────────────
+    this._abortController = null;
+  }
+
+  // ─── Adapter Management ───────────────────────────────────────────────────
+
+  /**
+   * Set the model adapter directly (used by app when switching backends).
+   * @param {import('./model-adapter.js').ModelAdapter} adapter
+   */
+  setAdapter(adapter) {
+    this._adapter = adapter;
   }
 
   /**
-   * Check WebGPU availability
+   * Get the active adapter, or null.
+   * @returns {import('./model-adapter.js').ModelAdapter|null}
+   */
+  getAdapter() {
+    return this._adapter;
+  }
+
+  // ─── WebGPU check (legacy compat) ─────────────────────────────────────────
+
+  /**
+   * Check WebGPU availability.
    * @returns {Promise<boolean>}
    */
   async checkWebGPU() {
-    if (!navigator.gpu) {
+    if (typeof navigator === 'undefined' || !navigator.gpu) {
       this.webgpuAvailable = false;
       return false;
     }
@@ -101,50 +128,75 @@ export class AIEngine {
     }
   }
 
+  // ─── Initialization ───────────────────────────────────────────────────────
+
   /**
-   * Initialize the local WebGPU engine with a model
-   * @param {string} [modelId] - Model identifier (defaults to first available)
-   * @param {function} [onProgress] - Progress callback ({text, progress})
+   * Initialize the engine with a model.
+   * Automatically selects the adapter based on current mode.
+   * Backward-compatible: works exactly as before for local/cloud modes.
+   *
+   * @param {string} [modelId]
+   * @param {function} [onProgress] - ({text, progress}) callback
+   * @returns {Promise<boolean>}
    */
   async init(modelId, onProgress) {
-    if (!modelId) {
-      modelId = DEFAULT_MODEL;
-    }
+    if (!modelId) modelId = DEFAULT_MODEL;
 
-    if (!MODELS[modelId]) {
+    // Validate model ID for local/hybrid modes
+    if ((this.mode === 'local' || this.mode === 'hybrid') && !MODELS[modelId]) {
       this.status = 'error';
       throw new Error(`Unknown model: ${modelId}`);
     }
 
+    // Return early if same model already loaded
     if (this.status === 'ready' && this.engine && this.modelId === modelId) {
       return true;
-    }
-
-    const hasWebGPU = await this.checkWebGPU();
-    if (!hasWebGPU) {
-      this.status = 'error';
-      throw new Error('WebGPU is not available on this device. Try Chrome 113+ on a supported device.');
     }
 
     this.status = 'loading';
     this.modelId = modelId;
 
-    try {
-      const webllm = await import('https://esm.run/@mlc-ai/web-llm');
+    const progressFn = onProgress
+      ? (p) => onProgress({ text: p.text || 'Loading…', progress: p.ratio || 0 })
+      : undefined;
 
-      const progressCallback = (report) => {
-        if (onProgress) {
-          onProgress({
-            text: report.text || 'Loading...',
-            progress: report.progress || 0
+    try {
+      if (this.mode === 'cloud') {
+        // Cloud mode: use CloudAdapter
+        const adapter = new CloudAdapter({
+          endpoint: this.cloudEndpoint,
+          apiKey: this.cloudApiKey,
+          model: this.cloudModel
+        });
+        await adapter.init(this.cloudModel, progressFn);
+        this._adapter = adapter;
+      } else if (this.mode === 'ollama') {
+        // Ollama mode
+        const adapter = new OllamaAdapter();
+        await adapter.init(modelId, progressFn);
+        this._adapter = adapter;
+      } else {
+        // local | hybrid: WebGPU
+        const hasWebGPU = await this.checkWebGPU();
+        if (!hasWebGPU) {
+          this.status = 'error';
+          throw new Error('WebGPU is not available on this device. Try Chrome 113+ on a supported device.');
+        }
+
+        // Dispose existing adapter if model changed
+        if (this._adapter instanceof WebLLMAdapter) {
+          await this._adapter.dispose().catch((err) => {
+            console.warn('[AIEngine] adapter disposal error:', err);
           });
         }
-      };
 
-      this.engine = await webllm.CreateMLCEngine(modelId, {
-        initProgressCallback: progressCallback
-      });
+        const adapter = new WebLLMAdapter();
+        await adapter.init(modelId, progressFn);
+        this._adapter = adapter;
+      }
 
+      // Set legacy sentinel
+      this.engine = this._adapter;
       this.status = 'ready';
       return true;
     } catch (err) {
@@ -153,49 +205,70 @@ export class AIEngine {
     }
   }
 
+  // ─── Cloud Config (backward compat) ──────────────────────────────────────
+
   /**
-   * Configure cloud API access
-   * Settings are stored in memory by the app layer.
-   * @param {string} endpoint - API base URL (e.g., https://api.openai.com/v1)
-   * @param {string} key - API key
-   * @param {string} [model] - Model name (default: gpt-3.5-turbo)
+   * Configure cloud API access.
+   * @param {string} endpoint
+   * @param {string} key
+   * @param {string} [model]
    */
   setCloudConfig(endpoint, key, model) {
     this.cloudEndpoint = (endpoint || '').replace(/\/+$/, '');
     this.cloudApiKey = key || '';
     this.cloudModel = model || 'gpt-3.5-turbo';
+
+    // Hot-update the cloud adapter if one is active
+    if (this._adapter instanceof CloudAdapter) {
+      this._adapter.configure({
+        endpoint: this.cloudEndpoint,
+        apiKey: this.cloudApiKey,
+        model: this.cloudModel
+      });
+    }
   }
 
-  /**
-   * Check if cloud is configured
-   */
   get cloudConfigured() {
     return !!(this.cloudEndpoint && this.cloudApiKey);
   }
 
-  /**
-   * Send a chat and get response.
-   * Routes to local or cloud based on current mode.
-   * 
-   * @param {Array} messages - Chat messages [{role, content}]
-   * @param {function} [onToken] - Streaming token callback (token, accumulated)
-   * @param {object} [options] - { forceCloud: false }
-   * @returns {Promise<string>} Full response text
-   */
-  async chat(messages, onToken, options = {}) {
-    const useCloud = this.mode === 'cloud' ||
-      (this.mode === 'hybrid' && (options.forceCloud || this.status !== 'ready'));
+  // ─── Context Management ───────────────────────────────────────────────────
 
-    if (useCloud) {
-      return this._chatCloud(messages, onToken);
-    } else {
-      return this._chatLocal(messages, onToken);
+  /**
+   * Trim the conversation history to maxContextTurns, summarizing evicted turns.
+   * The summary is prepended as a system message so the model retains context.
+   * @param {Array} messages
+   * @returns {Array} trimmed messages
+   */
+  _manageContext(messages) {
+    if (!messages || messages.length <= this.maxContextTurns) return messages;
+
+    const evicted = messages.slice(0, messages.length - this.maxContextTurns);
+    const kept = messages.slice(messages.length - this.maxContextTurns);
+
+    // Build a one-line summary of evicted turns
+    const evictedSummary = evicted
+      .filter((m) => m.role === 'user')
+      .map((m) => (typeof m.content === 'string' ? m.content.slice(0, 80) : ''))
+      .filter(Boolean)
+      .join('; ');
+
+    if (evictedSummary) {
+      this._contextSummary = `[Earlier context — topics discussed: ${evictedSummary}]`;
     }
+
+    return kept;
   }
 
+  /**
+   * Get generation config based on message content.
+   * High-precision mode activates for verify/debug instructions.
+   * @param {Array} messages
+   * @returns {{ temperature: number, max_tokens: number }}
+   */
   _getGenerationConfig(messages) {
     const transcript = (messages || [])
-      .map((message) => typeof message?.content === 'string' ? message.content : '')
+      .map((m) => (typeof m?.content === 'string' ? m.content : ''))
       .join('\n');
 
     const highPrecision = /\[Instruction: Answer only with verified facts|\[Mode: Verify\]|\[Mode: Debug\]/i.test(transcript);
@@ -206,142 +279,112 @@ export class AIEngine {
     };
   }
 
+  // ─── Chat ─────────────────────────────────────────────────────────────────
+
   /**
-   * Local inference via web-llm
+   * Send a chat and get a response.
+   * Routes to local or cloud based on current mode.
+   *
+   * @param {Array} messages - [{role, content}]
+   * @param {function} [onToken] - (token, accumulated) streaming callback
+   * @param {object} [options] - { forceCloud, tools, temperature, max_tokens }
+   * @returns {Promise<string>}
    */
-  async _chatLocal(messages, onToken) {
-    if (this.status !== 'ready' || !this.engine) {
+  async chat(messages, onToken, options = {}) {
+    const useCloud = this.mode === 'cloud' ||
+      (this.mode === 'hybrid' && (options.forceCloud || this.status !== 'ready'));
+
+    if (useCloud) {
+      return this._chatCloud(messages, onToken, options);
+    }
+    return this._chatLocal(messages, onToken, options);
+  }
+
+  /**
+   * Cancel any in-progress generation.
+   */
+  abort() {
+    if (this._adapter) this._adapter.abort();
+  }
+
+  // ─── Local inference (via adapter) ───────────────────────────────────────
+
+  async _chatLocal(messages, onToken, options = {}) {
+    if (this.status !== 'ready' || !this._adapter) {
       throw new Error('Local engine not ready. Call init() first or switch to cloud mode.');
     }
 
     const systemContent = SYSTEM_PROMPT + (this.promptContext || '');
+    const contextSummary = this._contextSummary
+      ? `\n\n${this._contextSummary}`
+      : '';
+
+    const trimmedMessages = this._manageContext(messages);
+
     const fullMessages = [
-      { role: 'system', content: systemContent },
-      ...messages
+      { role: 'system', content: systemContent + contextSummary },
+      ...trimmedMessages
     ];
 
-    let fullResponse = '';
-    const generationConfig = this._getGenerationConfig(fullMessages);
+    const { temperature, max_tokens } = this._getGenerationConfig(fullMessages);
 
     try {
-      const stream = await this.engine.chat.completions.create({
-        messages: fullMessages,
-        stream: true,
-        temperature: generationConfig.temperature,
-        max_tokens: generationConfig.max_tokens
+      return await this._adapter.chat(fullMessages, onToken, {
+        temperature,
+        max_tokens,
+        tools: options.tools
       });
-
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content || '';
-        if (delta) {
-          fullResponse += delta;
-          if (onToken) {
-            onToken(delta, fullResponse);
-          }
-        }
-      }
-
-      return fullResponse;
     } catch (err) {
       throw new Error('Local generation failed: ' + err.message);
     }
   }
 
-  /**
-   * Cloud inference via OpenAI-compatible API
-   */
-  async _chatCloud(messages, onToken) {
+  // ─── Cloud inference (via CloudAdapter or legacy path) ───────────────────
+
+  async _chatCloud(messages, onToken, options = {}) {
     if (!this.cloudEndpoint || !this.cloudApiKey) {
       throw new Error('Cloud API not configured. Set endpoint and API key in settings.');
     }
 
     const systemContent = SYSTEM_PROMPT + (this.promptContext || '');
+
+    // Use exact hostname comparison to avoid partial-match spoofing
+    let endpointHostname = '';
+    try {
+      endpointHostname = new URL(this.cloudEndpoint).hostname.toLowerCase();
+    } catch {}
+    const isAnthropic = endpointHostname === 'api.anthropic.com';
+
+    if (isAnthropic) {
+      return this._chatAnthropic(messages, systemContent, onToken);
+    }
+
+    // Use CloudAdapter
+    const adapter = this._adapter instanceof CloudAdapter
+      ? this._adapter
+      : new CloudAdapter({
+          endpoint: this.cloudEndpoint,
+          apiKey: this.cloudApiKey,
+          model: this.cloudModel
+        });
+
     const fullMessages = [
       { role: 'system', content: systemContent },
       ...messages
     ];
 
-    const endpointHost = this.cloudEndpoint.toLowerCase();
-    if (endpointHost.includes('api.anthropic.com')) {
-      return this._chatAnthropic(messages, systemContent, onToken);
-    }
-
-    // Ensure endpoint has /chat/completions
-    let url = this.cloudEndpoint;
-    if (!url.endsWith('/chat/completions')) {
-      if (!url.endsWith('/')) url += '/';
-      url += 'chat/completions';
-    }
+    const { temperature, max_tokens } = this._getGenerationConfig(fullMessages);
 
     try {
-      const generationConfig = this._getGenerationConfig(fullMessages);
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.cloudApiKey}`
-        },
-        body: JSON.stringify({
-          model: this.cloudModel,
-          messages: fullMessages,
-          stream: true,
-          temperature: generationConfig.temperature,
-          max_tokens: generationConfig.max_tokens
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error');
-        throw new Error(`Cloud API error (${response.status}): ${errorText}`);
-      }
-
-      // Handle streaming response (SSE)
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullResponse = '';
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // keep incomplete line in buffer
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-          const data = trimmed.slice(6);
-          if (data === '[DONE]') continue;
-
-          try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta?.content || '';
-            if (delta) {
-              fullResponse += delta;
-              if (onToken) {
-                onToken(delta, fullResponse);
-              }
-            }
-          } catch {
-            // Skip malformed JSON chunks
-          }
-        }
-      }
-
-      return fullResponse;
+      return await adapter.chat(fullMessages, onToken, { temperature, max_tokens });
     } catch (err) {
-      if (err.message.startsWith('Cloud API error')) {
-        throw err;
-      }
+      if (err.message.startsWith('Cloud API error')) throw err;
       throw new Error('Cloud API request failed: ' + err.message);
     }
   }
 
   /**
-   * Claude (Anthropic) inference using native Messages API with SSE streaming.
+   * Anthropic inference (kept as dedicated path for backward compat with tests).
    */
   async _chatAnthropic(messages, systemContent, onToken) {
     let url = this.cloudEndpoint;
@@ -354,8 +397,12 @@ export class AIEngine {
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
       .map((m) => ({ role: m.role, content: m.content || '' }));
 
+    const generationConfig = this._getGenerationConfig([
+      { role: 'system', content: systemContent },
+      ...anthropicMessages
+    ]);
+
     try {
-      const generationConfig = this._getGenerationConfig([{ role: 'system', content: systemContent }, ...anthropicMessages]);
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -394,10 +441,8 @@ export class AIEngine {
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed.startsWith('data: ')) continue;
-
           const data = trimmed.slice(6);
           if (!data) continue;
-
           try {
             const parsed = JSON.parse(data);
             if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
@@ -407,26 +452,25 @@ export class AIEngine {
                 if (onToken) onToken(delta, fullResponse);
               }
             }
-          } catch {
-            // Skip malformed chunks
-          }
+          } catch {}
         }
       }
 
       return fullResponse;
     } catch (err) {
-      if (err.message.startsWith('Cloud API error')) {
-        throw err;
-      }
+      if (err.message.startsWith('Cloud API error')) throw err;
       throw new Error('Cloud API request failed: ' + err.message);
     }
   }
 
+  // ─── Status ───────────────────────────────────────────────────────────────
+
   /**
-   * Get engine status
+   * Get engine status.
    * @returns {object}
    */
   getStatus() {
+    const caps = this._adapter?.getCapabilities?.() || {};
     return {
       status: this.status,
       mode: this.mode,
@@ -435,19 +479,17 @@ export class AIEngine {
       webgpuAvailable: this.webgpuAvailable,
       cloudConfigured: this.cloudConfigured,
       cloudEndpoint: this.cloudEndpoint ? this.cloudEndpoint.replace(/\/.*$/, '/...') : '',
-      cloudModel: this.cloudModel
+      cloudModel: this.cloudModel,
+      // Adapter info (new)
+      adapterName: this._adapter?.displayName || null,
+      backend: caps.backend || null,
+      toolCalling: caps.toolCalling || false,
+      maxContextTokens: caps.maxContextTokens || null
     };
   }
 
-  /**
-   * Get available local models
-   * @returns {object}
-   */
-  static getModels() {
-    return MODELS;
-  }
+  // ─── Static helpers (backward compat) ────────────────────────────────────
 
-  static getDefaultModelId() {
-    return DEFAULT_MODEL;
-  }
+  static getModels() { return MODELS; }
+  static getDefaultModelId() { return DEFAULT_MODEL; }
 }

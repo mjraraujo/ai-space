@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { RelayHub } from '../relays.js';
 
 describe('RelayHub', () => {
@@ -273,6 +273,80 @@ describe('RelayHub', () => {
       expect(prompt).toContain('ApprovalCheckpoints');
       expect(prompt).toContain('SuccessCriteria');
       expect(prompt).toContain('workflow_plan');
+    });
+  });
+
+  // ─── getToolDefs() ────────────────────────────────────────────────────────
+
+  describe('getToolDefs()', () => {
+    it('returns an array of tool definitions', () => {
+      const defs = hub.getToolDefs();
+      expect(Array.isArray(defs)).toBe(true);
+      expect(defs.length).toBeGreaterThan(0);
+    });
+
+    it('each tool def has type function and function.name', () => {
+      for (const def of hub.getToolDefs()) {
+        expect(def.type).toBe('function');
+        expect(def.function).toHaveProperty('name');
+        expect(def.function).toHaveProperty('description');
+        expect(def.function).toHaveProperty('parameters');
+      }
+    });
+
+    it('tool names are prefixed with relay_', () => {
+      for (const def of hub.getToolDefs()) {
+        expect(def.function.name).toMatch(/^relay_/);
+      }
+    });
+
+    it('filters by relayId when provided', () => {
+      const browserDefs = hub.getToolDefs('browser');
+      for (const def of browserDefs) {
+        expect(def.function.description).toContain('browser');
+      }
+    });
+
+    it('relay parameter is an enum of relay IDs', () => {
+      const defs = hub.getToolDefs();
+      for (const def of defs) {
+        const relayParam = def.function.parameters.properties.relay;
+        expect(relayParam).toHaveProperty('enum');
+        expect(Array.isArray(relayParam.enum)).toBe(true);
+      }
+    });
+
+    it('content is a required parameter', () => {
+      const defs = hub.getToolDefs();
+      for (const def of defs) {
+        expect(def.function.parameters.required).toContain('content');
+      }
+    });
+  });
+
+  // ─── buildPromptFromToolCall() ────────────────────────────────────────────
+
+  describe('buildPromptFromToolCall()', () => {
+    it('builds a valid prompt from relay_summarize call', () => {
+      const prompt = hub.buildPromptFromToolCall('relay_summarize', {
+        relay: 'browser',
+        content: 'some content'
+      });
+      expect(typeof prompt).toBe('string');
+      expect(prompt.length).toBeGreaterThan(0);
+      expect(prompt).toContain('RelayCommandJSON');
+    });
+
+    it('handles missing args gracefully', () => {
+      expect(() => hub.buildPromptFromToolCall('relay_summarize', {})).not.toThrow();
+    });
+
+    it('strips relay_ prefix to get actionId', () => {
+      const prompt = hub.buildPromptFromToolCall('relay_web_extract', {
+        relay: 'browser',
+        content: 'https://example.com'
+      });
+      expect(prompt).toContain('browser');
     });
   });
 });
