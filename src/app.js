@@ -3004,11 +3004,9 @@ function initTurboKV() {
       cards.forEach(c => c.classList.toggle('selected', c === card));
       updateTurboKVBadge(mode);
       updateTurboKVDisplay(mode);
-      ui.showNotification(
-        mode === 'standard' ? 'Standard context (2K tokens)' :
-        mode === 'extended' ? 'TurboKV 4K context — reload model to apply' :
-        'TurboKV 8K context — reload model to apply'
-      );
+      const label = mode === 'standard' ? 'Standard (2K tokens)' :
+                    mode === 'extended' ? 'TurboKV 4K context' : 'TurboKV 8K context';
+      ui.showNotification(`${label} — reload model to apply`);
     });
   });
 

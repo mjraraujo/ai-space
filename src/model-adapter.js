@@ -153,6 +153,7 @@ export class WebLLMAdapter extends ModelAdapter {
     /** @type {any} internal web-llm engine */
     this._engine = null;
     this._modelId = null;
+    this._kvMode = 'standard';
     this._ready = false;
     this._abortController = null;
   }
@@ -180,8 +181,11 @@ export class WebLLMAdapter extends ModelAdapter {
       throw new Error(`WebLLMAdapter: unknown model "${modelId}"`);
     }
 
-    // Return early if same model already loaded (ignore if kvMode changed)
-    if (this._ready && this._engine && this._modelId === modelId && !options.kvMode) return;
+    // Determine requested KV mode
+    const requestedKvMode = options.kvMode || 'standard';
+
+    // Return early if same model and same KV mode already loaded
+    if (this._ready && this._engine && this._modelId === modelId && this._kvMode === requestedKvMode) return;
 
     // Verify WebGPU availability
     if (!navigator.gpu) {
@@ -194,6 +198,7 @@ export class WebLLMAdapter extends ModelAdapter {
 
     this._ready = false;
     this._modelId = modelId;
+    this._kvMode = requestedKvMode;
 
     const webllm = await import('https://esm.run/@mlc-ai/web-llm');
 
@@ -207,10 +212,9 @@ export class WebLLMAdapter extends ModelAdapter {
     };
 
     // Apply KV context window size from TurboKV setting
-    const kvMode = options && options.kvMode;
-    if (kvMode === 'extended') {
+    if (requestedKvMode === 'extended') {
       engineConfig.kvConfig = { maxTotalSequenceLength: 4096 };
-    } else if (kvMode === 'ultra') {
+    } else if (requestedKvMode === 'ultra') {
       engineConfig.kvConfig = { maxTotalSequenceLength: 8192 };
     }
 

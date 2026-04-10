@@ -84,6 +84,7 @@ export class AIEngine {
     this.status = 'idle';     // idle | loading | ready | error
     this.webgpuAvailable = false;
     this.mode = 'local';      // local | ollama | cloud | hybrid
+    this._kvMode = 'standard';  // current KV context mode
 
     // Cloud configuration (legacy path, still supported)
     this.cloudEndpoint = '';
@@ -162,8 +163,11 @@ export class AIEngine {
       throw new Error(`Unknown model: ${modelId}`);
     }
 
-    // Return early if same model already loaded (skip if kvMode changed)
-    if (this.status === 'ready' && this.engine && this.modelId === modelId && !options.kvMode) {
+    // Determine requested KV mode
+    const requestedKvMode = options.kvMode || 'standard';
+
+    // Return early if same model and same KV mode already loaded
+    if (this.status === 'ready' && this.engine && this.modelId === modelId && this._kvMode === requestedKvMode) {
       return true;
     }
 
@@ -212,6 +216,7 @@ export class AIEngine {
       // Set legacy sentinel
       this.engine = this._adapter;
       this.status = 'ready';
+      this._kvMode = requestedKvMode;
       return true;
     } catch (err) {
       this.status = 'error';
