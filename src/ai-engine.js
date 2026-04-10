@@ -153,7 +153,7 @@ export class AIEngine {
    * @param {function} [onProgress] - ({text, progress}) callback
    * @returns {Promise<boolean>}
    */
-  async init(modelId, onProgress) {
+  async init(modelId, onProgress, options = {}) {
     if (!modelId) modelId = DEFAULT_MODEL;
 
     // Validate model ID for local/hybrid modes
@@ -162,8 +162,8 @@ export class AIEngine {
       throw new Error(`Unknown model: ${modelId}`);
     }
 
-    // Return early if same model already loaded
-    if (this.status === 'ready' && this.engine && this.modelId === modelId) {
+    // Return early if same model already loaded (skip if kvMode changed)
+    if (this.status === 'ready' && this.engine && this.modelId === modelId && !options.kvMode) {
       return true;
     }
 
@@ -205,7 +205,7 @@ export class AIEngine {
         }
 
         const adapter = new WebLLMAdapter();
-        await adapter.init(modelId, progressFn);
+        await adapter.init(modelId, progressFn, options);
         this._adapter = adapter;
       }
 

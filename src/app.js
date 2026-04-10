@@ -35,7 +35,8 @@ const state = {
   isGenerating: false,
   firstVisit: true,
   runtimeMode: 'strict',
-  localInternetAssist: false
+  localInternetAssist: false,
+  kvMode: 'standard'
 };
 
 // Modules
@@ -565,6 +566,9 @@ async function initApp() {
   // Wire event listeners FIRST so buttons work immediately
   wireEventListeners();
 
+  // Initialize TurboKV controls
+  initTurboKV();
+
   // Keep chat UX resilient when connectivity changes.
   setupConnectivityListeners();
 
@@ -938,7 +942,7 @@ async function runOnboardingDownload(attempt = 1) {
     await engine.init(selectedModel, (progress) => {
       const pct = Math.round((progress.progress || 0) * 100);
       ui.updateProgress(pct, progress.text || `Downloading… ${pct}%`);
-    });
+    }, { kvMode: state.kvMode });
 
     const loadedModelId = engine.getStatus().modelId;
     await auditLog('model_load', { model: loadedModelId, success: true });
@@ -2346,7 +2350,7 @@ async function handleSwitchModel() {
     await engine.init(modelId, (progress) => {
       const pct = Math.round((progress.progress || 0) * 100);
       if (hint) hint.textContent = progress.text || `Downloading… ${pct}%`;
-    });
+    }, { kvMode: state.kvMode });
 
     _switchModelAttempt = 0;
     if (hint) hint.textContent = '✓ Model ready — running entirely on your device';
@@ -2951,6 +2955,73 @@ async function restoreLastConversation() {
     }
   } catch (err) {
     console.warn('[ai-space] failed to restore conversation:', err);
+  }
+}
+
+/**
+ * TurboKV — Update badge text in chat header
+ */
+function updateTurboKVBadge(mode) {
+  const badge = document.getElementById('turbo-kv-badge');
+  if (!badge) return;
+  const labels = { standard: 'STD', extended: 'KV4K', ultra: 'KV8K' };
+  badge.textContent = labels[mode] || 'STD';
+}
+
+/**
+ * TurboKV — Update context window display
+ */
+function updateTurboKVDisplay(mode) {
+  const tokenMap = { standard: '2,048', extended: '4,096', ultra: '8,192' };
+  const fillMap = { standard: '25%', extended: '50%', ultra: '100%' };
+  const memMap = { standard: 'Baseline', extended: '~1.5× memory', ultra: '~2× memory' };
+  const tokensEl = document.getElementById('kv-tokens-display');
+  const fillEl = document.getElementById('kv-progress-fill');
+  const memEl = document.getElementById('kv-memory-label');
+  if (tokensEl) tokensEl.textContent = (tokenMap[mode] || '2,048') + ' tokens';
+  if (fillEl) fillEl.style.width = fillMap[mode] || '25%';
+  if (memEl) memEl.textContent = memMap[mode] || 'Baseline';
+}
+
+/**
+ * TurboKV — Initialize picker and restore saved setting
+ */
+function initTurboKV() {
+  // Restore saved mode
+  const saved = localStorage.getItem('ai-space-kv-mode') || 'standard';
+  state.kvMode = saved;
+  updateTurboKVBadge(saved);
+  updateTurboKVDisplay(saved);
+
+  // Sync card selection UI
+  const cards = document.querySelectorAll('#kv-mode-grid .kv-mode-card');
+  cards.forEach(card => {
+    card.classList.toggle('selected', card.dataset.kv === saved);
+    card.addEventListener('click', () => {
+      const mode = card.dataset.kv;
+      state.kvMode = mode;
+      localStorage.setItem('ai-space-kv-mode', mode);
+      cards.forEach(c => c.classList.toggle('selected', c === card));
+      updateTurboKVBadge(mode);
+      updateTurboKVDisplay(mode);
+      ui.showNotification(
+        mode === 'standard' ? 'Standard context (2K tokens)' :
+        mode === 'extended' ? 'TurboKV 4K context — reload model to apply' :
+        'TurboKV 8K context — reload model to apply'
+      );
+    });
+  });
+
+  // Clicking the header badge scrolls to TurboKV section in settings
+  const badge = document.getElementById('turbo-kv-badge');
+  if (badge) {
+    badge.addEventListener('click', () => {
+      ui.showView('settings');
+      setTimeout(() => {
+        const sec = document.getElementById('turbo-kv-section');
+        if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    });
   }
 }
 
