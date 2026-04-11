@@ -14,6 +14,7 @@ import { RelayHub } from './relays.js';
 import { ToolRunner } from './tool-runner.js';
 import { createDefaultRegistry } from './skill-registry.js';
 import { SkillStudio } from './skill-studio.js';
+import { WEB_LLM_MODELS } from './model-adapter.js';
 import {
   isWebLookupIntent,
   extractWebQuery,
@@ -35,7 +36,8 @@ const state = {
   isGenerating: false,
   firstVisit: true,
   runtimeMode: 'strict',
-  localInternetAssist: false
+  localInternetAssist: false,
+  kvMode: 'standard'
 };
 
 // Modules
@@ -565,6 +567,12 @@ async function initApp() {
   // Wire event listeners FIRST so buttons work immediately
   wireEventListeners();
 
+  // Initialize TurboKV / KV strategy controls
+  initTurboKV();
+
+  // Initialize command palette (⌘K)
+  initCommandPalette();
+
   // Keep chat UX resilient when connectivity changes.
   setupConnectivityListeners();
 
@@ -938,7 +946,7 @@ async function runOnboardingDownload(attempt = 1) {
     await engine.init(selectedModel, (progress) => {
       const pct = Math.round((progress.progress || 0) * 100);
       ui.updateProgress(pct, progress.text || `Downloading… ${pct}%`);
-    });
+    }, { kvMode: state.kvMode });
 
     const loadedModelId = engine.getStatus().modelId;
     await auditLog('model_load', { model: loadedModelId, success: true });
@@ -1878,6 +1886,8 @@ async function runInference(modelMessages, { modelId = '', isCloud = false } = {
   ui.updateStreamingMessage(fullResponse);
   ui.finalizeStreamingMessage();
   state.messages.push({ role: 'assistant', content: fullResponse });
+  updateTokenHUD();
+  updateKVMetricsDisplay();
 
   if (pendingShortcutActions.length > 0) {
     const actions = [...pendingShortcutActions];
@@ -2346,7 +2356,7 @@ async function handleSwitchModel() {
     await engine.init(modelId, (progress) => {
       const pct = Math.round((progress.progress || 0) * 100);
       if (hint) hint.textContent = progress.text || `Downloading… ${pct}%`;
-    });
+    }, { kvMode: state.kvMode });
 
     _switchModelAttempt = 0;
     if (hint) hint.textContent = '✓ Model ready — running entirely on your device';
@@ -2952,6 +2962,377 @@ async function restoreLastConversation() {
   } catch (err) {
     console.warn('[ai-space] failed to restore conversation:', err);
   }
+}
+
+// ─── Token HUD ────────────────────────────────────────────────────────────────
+
+/**
+ * Update the live token HUD bar in the chat header.
+ */
+function updateTokenHUD() {
+  const hud = document.getElementById('token-hud');
+  const fill = document.getElementById('token-hud-fill');
+  const label = document.getElementById('token-hud-label');
+  if (!hud || !fill || !label) return;
+
+  try {
+    const metrics = engine.getKVMetrics();
+    const { tokensOut, contextBudget, fillPct, throughputTps } = metrics;
+    const tpsStr = throughputTps > 0 ? `${throughputTps.toFixed(1)} tok/s` : '';
+    const ctx = contextBudget > 0 ? `${tokensOut.toLocaleString()} / ${contextBudget.toLocaleString()}` : '';
+    const parts = [ctx, tpsStr].filter(Boolean);
+
+    fill.style.width = `${fillPct}%`;
+    label.textContent = parts.length ? parts.join(' · ') : '';
+    hud.style.display = 'block';
+
+    // Colour code: amber >= 60%, red >= 85%, gradient otherwise
+    if (fillPct >= 85) {
+      fill.style.background = '#f87171';
+    } else if (fillPct >= 60) {
+      fill.style.background = '#fbbf24';
+    } else {
+      fill.style.removeProperty('background');
+    }
+  } catch {}
+}
+
+// ─── KV Strategy Panel ───────────────────────────────────────────────────────
+
+const KV_STRATEGY_DETAILS = {
+  'standard': 'Direct token trimming. Best for short conversations. Zero overhead.',
+  'sliding-window': 'Keeps the first message (attention anchor) + the most recent turns. Middle turns are summarised in one line.',
+  'semantic-compress': 'Scores each turn by relevance (questions, code, numbers). Keeps high-value turns + the recent window.',
+  'turbo-compress': 'Maximum efficiency: condenses older turns into a compact bullet synopsis. Only the most recent 6 turns kept verbatim.'
+};
+
+/**
+ * Update the KV badge text in the chat header.
+ * @param {string} strategy  KV strategy id
+ * @param {string} ctxMode   context window mode: standard|extended|ultra
+ */
+function updateTurboKVBadge(strategy, ctxMode) {
+  const badge = document.getElementById('turbo-kv-badge');
+  if (!badge) return;
+  const stratLabels = { standard: 'STD', 'sliding-window': 'SW', 'semantic-compress': 'SC', 'turbo-compress': 'TC', custom: 'CS' };
+  const ctxLabels = { standard: '', extended: '·4K', ultra: '·8K' };
+  badge.textContent = (stratLabels[strategy] || 'STD') + (ctxLabels[ctxMode] || '');
+}
+
+/**
+ * Update KV metrics display in the settings panel.
+ */
+function updateKVMetricsDisplay() {
+  try {
+    const m = engine.getKVMetrics();
+    const el = (id) => document.getElementById(id);
+    if (el('kvm-tokens-in')) el('kvm-tokens-in').textContent = m.tokensIn > 0 ? m.tokensIn.toLocaleString() : '—';
+    if (el('kvm-tokens-out')) el('kvm-tokens-out').textContent = m.tokensOut > 0 ? m.tokensOut.toLocaleString() : '—';
+    if (el('kvm-compressions')) el('kvm-compressions').textContent = m.compressions;
+    if (el('kvm-tps')) el('kvm-tps').textContent = m.throughputTps > 0 ? m.throughputTps.toFixed(1) : '—';
+    if (el('kvm-fill')) el('kvm-fill').textContent = m.fillPct + '%';
+    if (el('kv-progress-fill')) el('kv-progress-fill').style.width = m.fillPct + '%';
+
+    // Update log
+    const log = engine.getKVLog();
+    const logEl = el('kv-log');
+    const countEl = el('kv-log-count');
+    if (logEl) {
+      if (log.length === 0) {
+        logEl.innerHTML = '<div style="color:var(--fg-dim);font-size:12px;">No compressions yet. Start a long conversation.</div>';
+      } else {
+        logEl.innerHTML = [...log].reverse().map(l => `<div>${l}</div>`).join('');
+      }
+    }
+    if (countEl) countEl.textContent = `(${log.length} event${log.length !== 1 ? 's' : ''})`;
+  } catch {}
+}
+
+/**
+ * Initialize the KV Strategy panel and context chip selectors.
+ */
+function initTurboKV() {
+  // Restore saved KV strategy and context window mode
+  const savedStrategy = localStorage.getItem('ai-space-kv-strategy') || 'standard';
+  const savedCtx = localStorage.getItem('ai-space-kv-ctx') || 'standard';
+  state.kvMode = savedCtx;
+  engine.setKVStrategy(savedStrategy);
+  updateTurboKVBadge(savedStrategy, savedCtx);
+
+  // Wire strategy cards
+  const stratCards = document.querySelectorAll('#kv-strategy-grid .kv-strategy-card');
+  const detailEl = document.getElementById('kv-strategy-detail');
+  stratCards.forEach(card => {
+    const id = card.dataset.strategy;
+    card.classList.toggle('selected', id === savedStrategy);
+    card.addEventListener('click', () => {
+      stratCards.forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      localStorage.setItem('ai-space-kv-strategy', id);
+      engine.setKVStrategy(id);
+      if (detailEl) detailEl.textContent = KV_STRATEGY_DETAILS[id] || '';
+      updateTurboKVBadge(id, localStorage.getItem('ai-space-kv-ctx') || 'standard');
+      ui.showNotification(`KV strategy: ${card.querySelector('.kv-strategy-name')?.textContent || id}`);
+    });
+  });
+  if (detailEl) detailEl.textContent = KV_STRATEGY_DETAILS[savedStrategy] || '';
+
+  // Wire context window chips
+  const ctxChips = document.querySelectorAll('.kv-ctx-chip');
+  ctxChips.forEach(chip => {
+    chip.classList.toggle('selected', chip.dataset.ctx === savedCtx);
+    chip.addEventListener('click', () => {
+      ctxChips.forEach(c => c.classList.remove('selected'));
+      chip.classList.add('selected');
+      const ctx = chip.dataset.ctx;
+      localStorage.setItem('ai-space-kv-ctx', ctx);
+      // Update state for model loading
+      state.kvMode = ctx;
+      updateTurboKVBadge(localStorage.getItem('ai-space-kv-strategy') || 'standard', ctx);
+      ui.showNotification('Context window updated — reload model to apply');
+    });
+  });
+
+  // Wire custom script editor
+  const scriptEl = document.getElementById('kv-custom-script');
+  const applyBtn = document.getElementById('kv-apply-script');
+  const clearBtn = document.getElementById('kv-clear-script');
+  const statusEl = document.getElementById('kv-script-status');
+
+  const savedScript = localStorage.getItem('ai-space-kv-script') || '';
+  if (scriptEl && savedScript) scriptEl.value = savedScript;
+
+  if (applyBtn) {
+    applyBtn.addEventListener('click', () => {
+      const script = scriptEl?.value?.trim() || '';
+      if (!script) {
+        if (statusEl) { statusEl.textContent = 'Script is empty.'; statusEl.className = 'kv-script-status err'; }
+        return;
+      }
+      try {
+        engine.setKVCustomScript(script);
+        engine.setKVStrategy('custom');
+        // Select no strategy card
+        stratCards.forEach(c => c.classList.remove('selected'));
+        localStorage.setItem('ai-space-kv-script', script);
+        localStorage.setItem('ai-space-kv-strategy', 'custom');
+        updateTurboKVBadge('custom', localStorage.getItem('ai-space-kv-ctx') || 'standard');
+        if (statusEl) { statusEl.textContent = '✓ Custom script active'; statusEl.className = 'kv-script-status ok'; }
+        ui.showNotification('Custom KV script applied');
+      } catch (err) {
+        if (statusEl) { statusEl.textContent = '✗ ' + err.message; statusEl.className = 'kv-script-status err'; }
+      }
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (scriptEl) scriptEl.value = '';
+      engine.setKVCustomScript('');
+      engine.setKVStrategy('standard');
+      localStorage.removeItem('ai-space-kv-script');
+      localStorage.setItem('ai-space-kv-strategy', 'standard');
+      stratCards.forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'standard'));
+      if (statusEl) { statusEl.textContent = ''; statusEl.className = 'kv-script-status'; }
+      updateTurboKVBadge('standard', localStorage.getItem('ai-space-kv-ctx') || 'standard');
+      ui.showNotification('KV script cleared — using Standard strategy');
+    });
+  }
+
+  // Wire model catalog cards
+  const modelCards = document.querySelectorAll('#model-catalog .model-card');
+  modelCards.forEach(card => {
+    card.addEventListener('click', () => {
+      modelCards.forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      const modelId = card.dataset.modelId;
+      const picker = document.getElementById('local-model-picker');
+      if (picker) picker.value = modelId;
+    });
+  });
+
+  // Badge click → open settings + scroll
+  const badge = document.getElementById('turbo-kv-badge');
+  if (badge) {
+    badge.addEventListener('click', () => {
+      ui.showView('settings');
+      setTimeout(() => {
+        const sec = document.getElementById('turbo-kv-section');
+        if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    });
+  }
+}
+
+// ─── Command Palette ──────────────────────────────────────────────────────────
+
+let _cmdOpen = false;
+let _cmdActiveIdx = -1;
+let _cmdItems = [];
+
+/**
+ * Build the full command list from current state.
+ * @returns {Array<{section, icon, name, desc, tag, action}>}
+ */
+function buildCommandList(query) {
+  const q = (query || '').toLowerCase().trim();
+
+  const all = [
+    // ── Actions ──
+    { section: 'Actions', icon: '✏️', name: 'New Conversation', desc: 'Clear current chat and start fresh', action: () => { handleNewConversation?.(); closeCommandPalette(); } },
+    { section: 'Actions', icon: '⚙️', name: 'Open Settings', desc: 'Configure model, cloud, KV, and more', action: () => { ui.showView('settings'); closeCommandPalette(); } },
+    { section: 'Actions', icon: '🗑️', name: 'Clear All Data', desc: 'Delete all conversations and preferences', action: () => { closeCommandPalette(); handleClearData?.(); } },
+    // ── KV Strategies ──
+    ...([
+      { id: 'standard',         icon: '◈',   name: 'KV: Standard',          desc: 'Direct token trimming — no transformation' },
+      { id: 'sliding-window',   icon: '⟨⟩',  name: 'KV: Sliding Window',    desc: 'Attention-sink + recency window' },
+      { id: 'semantic-compress', icon: '◉',  name: 'KV: Semantic Compress',  desc: 'Importance-scored context selection' },
+      { id: 'turbo-compress',   icon: '⚡',   name: 'KV: Turbo Compress',    desc: 'Maximum efficiency — bullet synopsis' }
+    ].map(({ id, icon, name, desc }) => ({
+      section: 'KV Strategy', icon, name, desc, tag: 'KV',
+      action: () => {
+        engine.setKVStrategy(id);
+        localStorage.setItem('ai-space-kv-strategy', id);
+        updateTurboKVBadge(id, localStorage.getItem('ai-space-kv-ctx') || 'standard');
+        document.querySelectorAll('#kv-strategy-grid .kv-strategy-card')
+          .forEach(c => c.classList.toggle('selected', c.dataset.strategy === id));
+        ui.showNotification(name);
+        closeCommandPalette();
+      }
+    })))
+  ];
+
+  // Add models from WEB_LLM_MODELS (single source of truth)
+  for (const [modelId, info] of Object.entries(WEB_LLM_MODELS)) {
+    all.push({
+      section: 'Models',
+      icon: '🤖',
+      name: `Switch to ${info.name}`,
+      desc: `${info.description} · ${info.size}`,
+      tag: 'Model',
+      action: () => {
+        const picker = document.getElementById('local-model-picker');
+        if (picker) picker.value = modelId;
+        document.querySelectorAll('#model-catalog .model-card').forEach(c => c.classList.toggle('selected', c.dataset.modelId === modelId));
+        closeCommandPalette();
+        handleSwitchModel?.();
+      }
+    });
+  }
+
+  if (!q) return all;
+  return all.filter(item =>
+    item.name.toLowerCase().includes(q) ||
+    item.desc.toLowerCase().includes(q) ||
+    (item.section || '').toLowerCase().includes(q)
+  );
+}
+
+function renderCommandPalette(query) {
+  const results = document.getElementById('cmd-results');
+  if (!results) return;
+
+  _cmdItems = buildCommandList(query);
+  _cmdActiveIdx = _cmdItems.length > 0 ? 0 : -1;
+
+  // Group by section
+  const sections = {};
+  for (const item of _cmdItems) {
+    if (!sections[item.section]) sections[item.section] = [];
+    sections[item.section].push(item);
+  }
+
+  results.innerHTML = '';
+  let globalIdx = 0;
+
+  for (const [section, items] of Object.entries(sections)) {
+    const label = document.createElement('div');
+    label.className = 'cmd-section-label';
+    label.textContent = section;
+    results.appendChild(label);
+
+    for (const item of items) {
+      const idx = globalIdx++;
+      const el = document.createElement('div');
+      el.className = 'cmd-item' + (idx === 0 ? ' active' : '');
+      el.dataset.idx = idx;
+      el.innerHTML = `
+        <div class="cmd-item-icon">${item.icon}</div>
+        <div class="cmd-item-text">
+          <div class="cmd-item-name">${item.name}</div>
+          <div class="cmd-item-desc">${item.desc}</div>
+        </div>
+        ${item.tag ? `<span class="cmd-item-tag">${item.tag}</span>` : ''}
+      `;
+      el.addEventListener('click', () => { item.action?.(); });
+      el.addEventListener('mouseenter', () => {
+        document.querySelectorAll('.cmd-item').forEach(e => e.classList.remove('active'));
+        el.classList.add('active');
+        _cmdActiveIdx = idx;
+      });
+      results.appendChild(el);
+    }
+  }
+
+  if (_cmdItems.length === 0) {
+    results.innerHTML = '<div style="padding:24px;text-align:center;color:var(--fg-dim);font-size:14px;">No commands found</div>';
+  }
+}
+
+function openCommandPalette() {
+  _cmdOpen = true;
+  const palette = document.getElementById('cmd-palette');
+  const backdrop = document.getElementById('cmd-backdrop');
+  const input = document.getElementById('cmd-search');
+  if (palette) palette.classList.add('open');
+  if (backdrop) backdrop.classList.add('open');
+  if (input) { input.value = ''; input.focus(); }
+  renderCommandPalette('');
+}
+
+function closeCommandPalette() {
+  _cmdOpen = false;
+  document.getElementById('cmd-palette')?.classList.remove('open');
+  document.getElementById('cmd-backdrop')?.classList.remove('open');
+}
+
+function initCommandPalette() {
+  const backdrop = document.getElementById('cmd-backdrop');
+  const search = document.getElementById('cmd-search');
+
+  if (backdrop) backdrop.addEventListener('click', closeCommandPalette);
+
+  if (search) {
+    search.addEventListener('input', (e) => renderCommandPalette(e.target.value));
+    search.addEventListener('keydown', (e) => {
+      const items = document.querySelectorAll('.cmd-item');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        _cmdActiveIdx = Math.min(_cmdActiveIdx + 1, _cmdItems.length - 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        _cmdActiveIdx = Math.max(_cmdActiveIdx - 1, 0);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        _cmdItems[_cmdActiveIdx]?.action?.();
+        return;
+      } else if (e.key === 'Escape') {
+        closeCommandPalette();
+        return;
+      }
+      items.forEach((el, i) => el.classList.toggle('active', i === _cmdActiveIdx));
+      items[_cmdActiveIdx]?.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  // Global shortcut: Cmd+K / Ctrl+K
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      _cmdOpen ? closeCommandPalette() : openCommandPalette();
+    }
+    if (e.key === 'Escape' && _cmdOpen) closeCommandPalette();
+  });
 }
 
 export { initApp };

@@ -104,44 +104,117 @@ export class ModelAdapter {
 
 // ─── WebLLM Adapter (WebGPU on-device inference) ────────────────────────────
 
+/** maxTotalSequenceLength for the extended (4K) KV context mode */
+const EXTENDED_CONTEXT_LENGTH = 4096;
+/** maxTotalSequenceLength for the ultra (8K) KV context mode */
+const ULTRA_CONTEXT_LENGTH = 8192;
+
 /**
  * Known MLC-quantized models supported by @mlc-ai/web-llm.
  */
 export const WEB_LLM_MODELS = {
+  // ── Tiny / Fast ────────────────────────────────────────────────────────────
+  'SmolLM2-360M-Instruct-q4f16_1-MLC': {
+    name: 'SmolLM2 360M',
+    size: '200 MB',
+    description: 'Fastest option for lightweight tasks.',
+    quantization: 'q4f16_1',
+    maxContextTokens: 2048,
+    tier: 'tiny',
+    tags: ['fast', 'lightweight']
+  },
+  'TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC': {
+    name: 'TinyLlama 1.1B',
+    size: '640 MB',
+    description: 'Ultra-fast chat at 1.1B parameters. Great for constrained devices.',
+    quantization: 'q4f16_1',
+    maxContextTokens: 2048,
+    tier: 'tiny',
+    tags: ['fast', 'chat']
+  },
+  // ── Small / Balanced ───────────────────────────────────────────────────────
+  'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': {
+    name: 'Qwen 2.5 0.5B',
+    size: '350 MB',
+    description: 'Ultra-fast balance for everyday use.',
+    quantization: 'q4f16_1',
+    maxContextTokens: 4096,
+    tier: 'small',
+    tags: ['fast', 'multilingual']
+  },
   'Llama-3.2-1B-Instruct-q4f16_1-MLC': {
     name: 'Llama 3.2 1B',
     size: '700 MB',
-    description: 'Best quality local reasoning. Recommended default.',
+    description: 'Best quality local reasoning at 1B. Recommended default.',
     quantization: 'q4f16_1',
-    maxContextTokens: 8192
+    maxContextTokens: 8192,
+    tier: 'small',
+    tags: ['recommended', 'reasoning']
   },
   'Qwen2.5-1.5B-Instruct-q4f16_1-MLC': {
     name: 'Qwen 2.5 1.5B',
     size: '900 MB',
     description: 'Better quality than 0.5B, lighter than Llama 1B. Great middle ground.',
     quantization: 'q4f16_1',
-    maxContextTokens: 8192
+    maxContextTokens: 8192,
+    tier: 'small',
+    tags: ['multilingual', 'balanced']
   },
-  'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': {
-    name: 'Qwen 2.5 0.5B',
-    size: '350 MB',
-    description: 'Ultra-fast balance for everyday use.',
+  'gemma-2-2b-it-q4f16_1-MLC': {
+    name: 'Gemma 2 2B',
+    size: '1.4 GB',
+    description: 'Google Gemma 2 at 2B. Strong instruction following, low footprint.',
     quantization: 'q4f16_1',
-    maxContextTokens: 4096
+    maxContextTokens: 8192,
+    tier: 'small',
+    tags: ['google', 'instruction']
   },
-  'SmolLM2-360M-Instruct-q4f16_1-MLC': {
-    name: 'SmolLM2 360M',
-    size: '200 MB',
-    description: 'Fastest option for lightweight tasks.',
+  // ── Medium ─────────────────────────────────────────────────────────────────
+  'Llama-3.2-3B-Instruct-q4f16_1-MLC': {
+    name: 'Llama 3.2 3B',
+    size: '2.0 GB',
+    description: 'Significantly smarter than 1B. Best quality/size tradeoff for most tasks.',
     quantization: 'q4f16_1',
-    maxContextTokens: 2048
+    maxContextTokens: 8192,
+    tier: 'medium',
+    tags: ['reasoning', 'quality']
   },
   'Phi-3.5-mini-instruct-q4f16_1-MLC': {
     name: 'Phi 3.5 Mini 3.8B',
     size: '2.2 GB',
-    description: 'Largest local model. Needs 4 GB+ RAM.',
+    description: 'Microsoft Phi-3.5. Excellent reasoning despite compact size.',
     quantization: 'q4f16_1',
-    maxContextTokens: 16384
+    maxContextTokens: 16384,
+    tier: 'medium',
+    tags: ['microsoft', 'reasoning', 'long-context']
+  },
+  // ── Large ──────────────────────────────────────────────────────────────────
+  'Mistral-7B-Instruct-v0.3-q4f16_1-MLC': {
+    name: 'Mistral 7B v0.3',
+    size: '4.1 GB',
+    description: 'Classic Mistral 7B. Excellent instruction following and code. Needs 6 GB+ GPU.',
+    quantization: 'q4f16_1',
+    maxContextTokens: 32768,
+    tier: 'large',
+    tags: ['code', 'instruction', 'long-context']
+  },
+  'Llama-3.1-8B-Instruct-q4f32_1-MLC': {
+    name: 'Llama 3.1 8B',
+    size: '5.0 GB',
+    description: 'Meta Llama 3.1 8B. Top-tier local quality. Needs 8 GB+ GPU RAM.',
+    quantization: 'q4f32_1',
+    maxContextTokens: 32768,
+    tier: 'large',
+    tags: ['quality', 'reasoning', 'code']
+  },
+  'DeepSeek-R1-Distill-Qwen-7B-q4f16_1-MLC': {
+    name: 'DeepSeek-R1 7B',
+    size: '4.4 GB',
+    description: 'DeepSeek R1 reasoning distillation. Chain-of-thought, math, and logic. Needs 6 GB+ GPU.',
+    quantization: 'q4f16_1',
+    maxContextTokens: 32768,
+    tier: 'large',
+    tags: ['reasoning', 'math', 'chain-of-thought']
   }
 };
 
@@ -153,6 +226,7 @@ export class WebLLMAdapter extends ModelAdapter {
     /** @type {any} internal web-llm engine */
     this._engine = null;
     this._modelId = null;
+    this._kvMode = 'standard';
     this._ready = false;
     this._abortController = null;
   }
@@ -174,14 +248,17 @@ export class WebLLMAdapter extends ModelAdapter {
     return info ? `Local · ${info.name}` : 'Local · WebGPU';
   }
 
-  async init(modelId, onProgress) {
+  async init(modelId, onProgress, options = {}) {
     if (!modelId) modelId = DEFAULT_WEB_LLM_MODEL;
     if (!WEB_LLM_MODELS[modelId]) {
       throw new Error(`WebLLMAdapter: unknown model "${modelId}"`);
     }
 
-    // Return early if same model already loaded
-    if (this._ready && this._engine && this._modelId === modelId) return;
+    // Determine requested KV mode
+    const requestedKvMode = options.kvMode || 'standard';
+
+    // Return early if same model and same KV mode already loaded
+    if (this._ready && this._engine && this._modelId === modelId && this._kvMode === requestedKvMode) return;
 
     // Verify WebGPU availability
     if (!navigator.gpu) {
@@ -194,15 +271,27 @@ export class WebLLMAdapter extends ModelAdapter {
 
     this._ready = false;
     this._modelId = modelId;
+    this._kvMode = requestedKvMode;
 
     const webllm = await import('https://esm.run/@mlc-ai/web-llm');
-    this._engine = await webllm.CreateMLCEngine(modelId, {
+
+    /** @type {import('@mlc-ai/web-llm').MLCEngineConfig} */
+    const engineConfig = {
       initProgressCallback: (report) => {
         if (onProgress) {
           onProgress({ text: report.text || 'Loading…', ratio: report.progress || 0 });
         }
       }
-    });
+    };
+
+    // Apply KV context window size from TurboKV setting
+    if (requestedKvMode === 'extended') {
+      engineConfig.kvConfig = { maxTotalSequenceLength: EXTENDED_CONTEXT_LENGTH };
+    } else if (requestedKvMode === 'ultra') {
+      engineConfig.kvConfig = { maxTotalSequenceLength: ULTRA_CONTEXT_LENGTH };
+    }
+
+    this._engine = await webllm.CreateMLCEngine(modelId, engineConfig);
 
     this._ready = true;
   }
@@ -216,7 +305,9 @@ export class WebLLMAdapter extends ModelAdapter {
     const max_tokens = options.max_tokens ?? 1024;
 
     let fullResponse = '';
+    let tokenCount = 0;
     this._abortController = new AbortController();
+    const startMs = Date.now();
 
     try {
       const stream = await this._engine.chat.completions.create({
@@ -231,6 +322,7 @@ export class WebLLMAdapter extends ModelAdapter {
         const delta = chunk.choices[0]?.delta?.content || '';
         if (delta) {
           fullResponse += delta;
+          tokenCount++;
           if (onToken) onToken(delta, fullResponse);
         }
       }
@@ -238,7 +330,23 @@ export class WebLLMAdapter extends ModelAdapter {
       this._abortController = null;
     }
 
+    // Record throughput for external metrics consumers
+    const elapsedMs = Date.now() - startMs;
+    this._lastStats = {
+      tokenCount,
+      elapsedMs,
+      throughputTps: elapsedMs > 0 ? (tokenCount / elapsedMs) * 1000 : 0
+    };
+
     return fullResponse;
+  }
+
+  /**
+   * Get stats from the most recent generation.
+   * @returns {{ tokenCount: number, elapsedMs: number, throughputTps: number }|null}
+   */
+  getLastStats() {
+    return this._lastStats || null;
   }
 
   abort() {
