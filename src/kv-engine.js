@@ -18,6 +18,11 @@
 
 // ─── Strategy registry ───────────────────────────────────────────────────────
 
+/** Exponential moving average smoothing factor for throughput */
+const EMA_ALPHA = 0.3;
+/** Complement of EMA_ALPHA */
+const EMA_BETA = 1 - EMA_ALPHA;
+
 /** @typedef {{ role: string, content: string }} Message */
 
 /** Characters-per-token approximation (conservative, matches ai-engine.js) */
@@ -215,9 +220,11 @@ function strategyTurboCompress(messages, budget) {
   }
 
   // Synopsis too big — truncate bullets until they fit
-  while (bullets.length > 1 && synopsisTokens + recentTokens > budget) {
+  while (bullets.length > 1) {
     bullets.shift();
     synopsis.content = `[Turbo-compressed prior context:\n${bullets.join('\n')}]`;
+    const updatedTokens = estimateTokens(synopsis.content);
+    if (updatedTokens + recentTokens <= budget) break;
   }
 
   return [synopsis, ...recent];
@@ -467,7 +474,7 @@ export class KVEngine {
       // Exponential moving average
       this._metrics.throughputTps = this._metrics.throughputTps === 0
         ? tps
-        : 0.7 * this._metrics.throughputTps + 0.3 * tps;
+        : EMA_BETA * this._metrics.throughputTps + EMA_ALPHA * tps;
     }
   }
 

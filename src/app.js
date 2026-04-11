@@ -14,6 +14,7 @@ import { RelayHub } from './relays.js';
 import { ToolRunner } from './tool-runner.js';
 import { createDefaultRegistry } from './skill-registry.js';
 import { SkillStudio } from './skill-studio.js';
+import { WEB_LLM_MODELS } from './model-adapter.js';
 import {
   isWebLookupIntent,
   extractWebQuery,
@@ -3182,32 +3183,32 @@ function buildCommandList(query) {
     { section: 'Actions', icon: '⚙️', name: 'Open Settings', desc: 'Configure model, cloud, KV, and more', action: () => { ui.showView('settings'); closeCommandPalette(); } },
     { section: 'Actions', icon: '🗑️', name: 'Clear All Data', desc: 'Delete all conversations and preferences', action: () => { closeCommandPalette(); handleClearData?.(); } },
     // ── KV Strategies ──
-    { section: 'KV Strategy', icon: '◈', name: 'KV: Standard', desc: 'Direct token trimming — no transformation', tag: 'KV', action: () => { engine.setKVStrategy('standard'); state.kvMode = 'standard'; localStorage.setItem('ai-space-kv-strategy', 'standard'); updateTurboKVBadge('standard', localStorage.getItem('ai-space-kv-ctx') || 'standard'); document.querySelectorAll('#kv-strategy-grid .kv-strategy-card').forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'standard')); ui.showNotification('KV: Standard'); closeCommandPalette(); } },
-    { section: 'KV Strategy', icon: '⟨⟩', name: 'KV: Sliding Window', desc: 'Attention-sink + recency window', tag: 'KV', action: () => { engine.setKVStrategy('sliding-window'); state.kvMode = 'sliding-window'; localStorage.setItem('ai-space-kv-strategy', 'sliding-window'); updateTurboKVBadge('sliding-window', localStorage.getItem('ai-space-kv-ctx') || 'standard'); document.querySelectorAll('#kv-strategy-grid .kv-strategy-card').forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'sliding-window')); ui.showNotification('KV: Sliding Window'); closeCommandPalette(); } },
-    { section: 'KV Strategy', icon: '◉', name: 'KV: Semantic Compress', desc: 'Importance-scored context selection', tag: 'KV', action: () => { engine.setKVStrategy('semantic-compress'); state.kvMode = 'semantic-compress'; localStorage.setItem('ai-space-kv-strategy', 'semantic-compress'); updateTurboKVBadge('semantic-compress', localStorage.getItem('ai-space-kv-ctx') || 'standard'); document.querySelectorAll('#kv-strategy-grid .kv-strategy-card').forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'semantic-compress')); ui.showNotification('KV: Semantic Compress'); closeCommandPalette(); } },
-    { section: 'KV Strategy', icon: '⚡', name: 'KV: Turbo Compress', desc: 'Maximum efficiency — bullet synopsis', tag: 'KV', action: () => { engine.setKVStrategy('turbo-compress'); state.kvMode = 'turbo-compress'; localStorage.setItem('ai-space-kv-strategy', 'turbo-compress'); updateTurboKVBadge('turbo-compress', localStorage.getItem('ai-space-kv-ctx') || 'standard'); document.querySelectorAll('#kv-strategy-grid .kv-strategy-card').forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'turbo-compress')); ui.showNotification('KV: Turbo Compress'); closeCommandPalette(); } },
+    ...([
+      { id: 'standard',         icon: '◈',   name: 'KV: Standard',          desc: 'Direct token trimming — no transformation' },
+      { id: 'sliding-window',   icon: '⟨⟩',  name: 'KV: Sliding Window',    desc: 'Attention-sink + recency window' },
+      { id: 'semantic-compress', icon: '◉',  name: 'KV: Semantic Compress',  desc: 'Importance-scored context selection' },
+      { id: 'turbo-compress',   icon: '⚡',   name: 'KV: Turbo Compress',    desc: 'Maximum efficiency — bullet synopsis' }
+    ].map(({ id, icon, name, desc }) => ({
+      section: 'KV Strategy', icon, name, desc, tag: 'KV',
+      action: () => {
+        engine.setKVStrategy(id);
+        localStorage.setItem('ai-space-kv-strategy', id);
+        updateTurboKVBadge(id, localStorage.getItem('ai-space-kv-ctx') || 'standard');
+        document.querySelectorAll('#kv-strategy-grid .kv-strategy-card')
+          .forEach(c => c.classList.toggle('selected', c.dataset.strategy === id));
+        ui.showNotification(name);
+        closeCommandPalette();
+      }
+    })))
   ];
 
-  // Add models
-  const models = {
-    'SmolLM2-360M-Instruct-q4f16_1-MLC': { name: 'SmolLM2 360M', desc: 'Fastest local model · 200 MB' },
-    'TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC': { name: 'TinyLlama 1.1B', desc: 'Ultra-fast chat · 640 MB' },
-    'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': { name: 'Qwen 2.5 0.5B', desc: 'Ultra-fast · 350 MB' },
-    'Llama-3.2-1B-Instruct-q4f16_1-MLC': { name: 'Llama 3.2 1B', desc: 'Recommended default · 700 MB' },
-    'Qwen2.5-1.5B-Instruct-q4f16_1-MLC': { name: 'Qwen 2.5 1.5B', desc: 'Multilingual · 900 MB' },
-    'gemma-2-2b-it-q4f16_1-MLC': { name: 'Gemma 2 2B', desc: 'Google · 1.4 GB' },
-    'Llama-3.2-3B-Instruct-q4f16_1-MLC': { name: 'Llama 3.2 3B', desc: 'High quality · 2.0 GB' },
-    'Phi-3.5-mini-instruct-q4f16_1-MLC': { name: 'Phi 3.5 Mini 3.8B', desc: 'Microsoft · 2.2 GB · 16K ctx' },
-    'Mistral-7B-Instruct-v0.3-q4f16_1-MLC': { name: 'Mistral 7B v0.3', desc: 'Code + instruction · 4.1 GB' },
-    'Llama-3.1-8B-Instruct-q4f32_1-MLC': { name: 'Llama 3.1 8B', desc: 'Top-tier quality · 5.0 GB' },
-    'DeepSeek-R1-Distill-Qwen-7B-q4f16_1-MLC': { name: 'DeepSeek-R1 7B', desc: 'Reasoning + math · 4.4 GB' }
-  };
-  for (const [modelId, info] of Object.entries(models)) {
+  // Add models from WEB_LLM_MODELS (single source of truth)
+  for (const [modelId, info] of Object.entries(WEB_LLM_MODELS)) {
     all.push({
       section: 'Models',
       icon: '🤖',
       name: `Switch to ${info.name}`,
-      desc: info.desc,
+      desc: `${info.description} · ${info.size}`,
       tag: 'Model',
       action: () => {
         const picker = document.getElementById('local-model-picker');

@@ -104,6 +104,11 @@ export class ModelAdapter {
 
 // ─── WebLLM Adapter (WebGPU on-device inference) ────────────────────────────
 
+/** maxTotalSequenceLength for the extended (4K) KV context mode */
+const EXTENDED_CONTEXT_LENGTH = 4096;
+/** maxTotalSequenceLength for the ultra (8K) KV context mode */
+const ULTRA_CONTEXT_LENGTH = 8192;
+
 /**
  * Known MLC-quantized models supported by @mlc-ai/web-llm.
  */
@@ -281,9 +286,9 @@ export class WebLLMAdapter extends ModelAdapter {
 
     // Apply KV context window size from TurboKV setting
     if (requestedKvMode === 'extended') {
-      engineConfig.kvConfig = { maxTotalSequenceLength: 4096 };
+      engineConfig.kvConfig = { maxTotalSequenceLength: EXTENDED_CONTEXT_LENGTH };
     } else if (requestedKvMode === 'ultra') {
-      engineConfig.kvConfig = { maxTotalSequenceLength: 8192 };
+      engineConfig.kvConfig = { maxTotalSequenceLength: ULTRA_CONTEXT_LENGTH };
     }
 
     this._engine = await webllm.CreateMLCEngine(modelId, engineConfig);
