@@ -19,6 +19,7 @@ import {
   WEB_LLM_MODELS,
   DEFAULT_WEB_LLM_MODEL
 } from './model-adapter.js';
+import { KVEngine } from './kv-engine.js';
 
 // ─── Keep legacy MODELS / DEFAULT_MODEL exports for backward compat ──────────
 const DEFAULT_MODEL = DEFAULT_WEB_LLM_MODEL;
@@ -93,6 +94,10 @@ export class AIEngine {
 
     // Personalized prompt context from onboarding
     this.promptContext = '';
+
+    // ─── KV Engine ────────────────────────────────────────────────────────
+    /** @type {KVEngine} */
+    this.kvEngine = new KVEngine();
 
     // ─── Context management ───────────────────────────────────────────────
     /** Maximum number of conversation turns to keep in the live context window */
@@ -251,7 +256,49 @@ export class AIEngine {
     return !!(this.cloudEndpoint && this.cloudApiKey);
   }
 
-  // ─── Context Management ───────────────────────────────────────────────────
+  // ─── KV Engine passthrough ────────────────────────────────────────────────
+
+  /**
+   * Set the active KV optimization strategy.
+   * @param {string} strategyId
+   */
+  setKVStrategy(strategyId) {
+    this.kvEngine.setStrategy(strategyId);
+    this._kvMode = strategyId;
+  }
+
+  /**
+   * Set a custom KV script for the engine.
+   * @param {string} scriptSource JS function body: (messages, budget) => messages
+   */
+  setKVCustomScript(scriptSource) {
+    this.kvEngine.setCustomScript(scriptSource);
+    if (scriptSource) this._kvMode = 'custom';
+  }
+
+  /**
+   * Get current KV metrics: tokens in/out, compressions, throughput.
+   * @returns {{ tokensIn: number, tokensOut: number, compressions: number, throughputTps: number,
+   *             contextTokens: number, contextBudget: number, fillPct: number }}
+   */
+  getKVMetrics() {
+    const base = this.kvEngine.getMetrics();
+    const maxCtx = this._adapter?.getCapabilities?.()?.maxContextTokens || DEFAULT_CONTEXT_WINDOW_TOKENS;
+    const fillPct = maxCtx > 0 ? Math.min(100, Math.round((base.tokensOut / maxCtx) * 100)) : 0;
+    return {
+      ...base,
+      contextBudget: maxCtx,
+      fillPct
+    };
+  }
+
+  /**
+   * Get the KV compression event log.
+   * @returns {string[]}
+   */
+  getKVLog() {
+    return this.kvEngine.getLog();
+  }
 
   /**
    * Trim the conversation history to maxContextTurns, summarizing evicted turns.
@@ -387,25 +434,41 @@ export class AIEngine {
     }
 
     const systemContent = SYSTEM_PROMPT + (this.promptContext || '');
-    const contextSummary = this._contextSummary
-      ? `\n\n${this._contextSummary}`
-      : '';
 
-    const trimmedMessages = this._manageContext(messages);
+    // Compute token budget for history
+    const maxCtx = this._adapter.getCapabilities?.()?.maxContextTokens || DEFAULT_CONTEXT_WINDOW_TOKENS;
+    const systemTokens = Math.ceil((systemContent + (this._contextSummary || '')).length / CHARS_PER_TOKEN);
+    const budgetTokens = Math.max(maxCtx - systemTokens - RESPONSE_RESERVE_TOKENS, MIN_TOKEN_FLOOR);
+
+    // Run KV Engine strategy to optimise the message history
+    const { messages: optimizedMessages } = this.kvEngine.optimize(messages, budgetTokens);
+
+    // Keep _contextSummary in sync (used when kvEngine also evicts turns)
+    const contextSummary = this._contextSummary ? `\n\n${this._contextSummary}` : '';
 
     const fullMessages = [
       { role: 'system', content: systemContent + contextSummary },
-      ...trimmedMessages
+      ...optimizedMessages
     ];
 
     const { temperature, max_tokens } = this._getGenerationConfig(fullMessages);
 
     try {
-      return await this._adapter.chat(fullMessages, onToken, {
+      const result = await this._adapter.chat(fullMessages, onToken, {
         temperature,
         max_tokens,
         tools: options.tools
       });
+
+      // Feed throughput into KVEngine metrics if adapter supports it
+      if (typeof this._adapter.getLastStats === 'function') {
+        const stats = this._adapter.getLastStats();
+        if (stats) {
+          this.kvEngine.recordThroughput(stats.tokenCount, stats.elapsedMs);
+        }
+      }
+
+      return result;
     } catch (err) {
       throw new Error('Local generation failed: ' + err.message);
     }

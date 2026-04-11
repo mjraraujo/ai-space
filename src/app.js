@@ -566,8 +566,11 @@ async function initApp() {
   // Wire event listeners FIRST so buttons work immediately
   wireEventListeners();
 
-  // Initialize TurboKV controls
+  // Initialize TurboKV / KV strategy controls
   initTurboKV();
+
+  // Initialize command palette (⌘K)
+  initCommandPalette();
 
   // Keep chat UX resilient when connectivity changes.
   setupConnectivityListeners();
@@ -1882,6 +1885,8 @@ async function runInference(modelMessages, { modelId = '', isCloud = false } = {
   ui.updateStreamingMessage(fullResponse);
   ui.finalizeStreamingMessage();
   state.messages.push({ role: 'assistant', content: fullResponse });
+  updateTokenHUD();
+  updateKVMetricsDisplay();
 
   if (pendingShortcutActions.length > 0) {
     const actions = [...pendingShortcutActions];
@@ -2958,59 +2963,194 @@ async function restoreLastConversation() {
   }
 }
 
+// ─── Token HUD ────────────────────────────────────────────────────────────────
+
 /**
- * TurboKV — Update badge text in chat header
+ * Update the live token HUD bar in the chat header.
  */
-function updateTurboKVBadge(mode) {
+function updateTokenHUD() {
+  const hud = document.getElementById('token-hud');
+  const fill = document.getElementById('token-hud-fill');
+  const label = document.getElementById('token-hud-label');
+  if (!hud || !fill || !label) return;
+
+  try {
+    const metrics = engine.getKVMetrics();
+    const { tokensOut, contextBudget, fillPct, throughputTps } = metrics;
+    const tpsStr = throughputTps > 0 ? `${throughputTps.toFixed(1)} tok/s` : '';
+    const ctx = contextBudget > 0 ? `${tokensOut.toLocaleString()} / ${contextBudget.toLocaleString()}` : '';
+    const parts = [ctx, tpsStr].filter(Boolean);
+
+    fill.style.width = `${fillPct}%`;
+    label.textContent = parts.length ? parts.join(' · ') : '';
+    hud.style.display = 'block';
+
+    // Colour code: amber >= 60%, red >= 85%, gradient otherwise
+    if (fillPct >= 85) {
+      fill.style.background = '#f87171';
+    } else if (fillPct >= 60) {
+      fill.style.background = '#fbbf24';
+    } else {
+      fill.style.removeProperty('background');
+    }
+  } catch {}
+}
+
+// ─── KV Strategy Panel ───────────────────────────────────────────────────────
+
+const KV_STRATEGY_DETAILS = {
+  'standard': 'Direct token trimming. Best for short conversations. Zero overhead.',
+  'sliding-window': 'Keeps the first message (attention anchor) + the most recent turns. Middle turns are summarised in one line.',
+  'semantic-compress': 'Scores each turn by relevance (questions, code, numbers). Keeps high-value turns + the recent window.',
+  'turbo-compress': 'Maximum efficiency: condenses older turns into a compact bullet synopsis. Only the most recent 6 turns kept verbatim.'
+};
+
+/**
+ * Update the KV badge text in the chat header.
+ * @param {string} strategy  KV strategy id
+ * @param {string} ctxMode   context window mode: standard|extended|ultra
+ */
+function updateTurboKVBadge(strategy, ctxMode) {
   const badge = document.getElementById('turbo-kv-badge');
   if (!badge) return;
-  const labels = { standard: 'STD', extended: 'KV4K', ultra: 'KV8K' };
-  badge.textContent = labels[mode] || 'STD';
+  const stratLabels = { standard: 'STD', 'sliding-window': 'SW', 'semantic-compress': 'SC', 'turbo-compress': 'TC', custom: 'CS' };
+  const ctxLabels = { standard: '', extended: '·4K', ultra: '·8K' };
+  badge.textContent = (stratLabels[strategy] || 'STD') + (ctxLabels[ctxMode] || '');
 }
 
 /**
- * TurboKV — Update context window display
+ * Update KV metrics display in the settings panel.
  */
-function updateTurboKVDisplay(mode) {
-  const tokenMap = { standard: '2,048', extended: '4,096', ultra: '8,192' };
-  const fillMap = { standard: '25%', extended: '50%', ultra: '100%' };
-  const memMap = { standard: 'Baseline', extended: '~1.5× memory', ultra: '~2× memory' };
-  const tokensEl = document.getElementById('kv-tokens-display');
-  const fillEl = document.getElementById('kv-progress-fill');
-  const memEl = document.getElementById('kv-memory-label');
-  if (tokensEl) tokensEl.textContent = (tokenMap[mode] || '2,048') + ' tokens';
-  if (fillEl) fillEl.style.width = fillMap[mode] || '25%';
-  if (memEl) memEl.textContent = memMap[mode] || 'Baseline';
+function updateKVMetricsDisplay() {
+  try {
+    const m = engine.getKVMetrics();
+    const el = (id) => document.getElementById(id);
+    if (el('kvm-tokens-in')) el('kvm-tokens-in').textContent = m.tokensIn > 0 ? m.tokensIn.toLocaleString() : '—';
+    if (el('kvm-tokens-out')) el('kvm-tokens-out').textContent = m.tokensOut > 0 ? m.tokensOut.toLocaleString() : '—';
+    if (el('kvm-compressions')) el('kvm-compressions').textContent = m.compressions;
+    if (el('kvm-tps')) el('kvm-tps').textContent = m.throughputTps > 0 ? m.throughputTps.toFixed(1) : '—';
+    if (el('kvm-fill')) el('kvm-fill').textContent = m.fillPct + '%';
+    if (el('kv-progress-fill')) el('kv-progress-fill').style.width = m.fillPct + '%';
+
+    // Update log
+    const log = engine.getKVLog();
+    const logEl = el('kv-log');
+    const countEl = el('kv-log-count');
+    if (logEl) {
+      if (log.length === 0) {
+        logEl.innerHTML = '<div style="color:var(--fg-dim);font-size:12px;">No compressions yet. Start a long conversation.</div>';
+      } else {
+        logEl.innerHTML = [...log].reverse().map(l => `<div>${l}</div>`).join('');
+      }
+    }
+    if (countEl) countEl.textContent = `(${log.length} event${log.length !== 1 ? 's' : ''})`;
+  } catch {}
 }
 
 /**
- * TurboKV — Initialize picker and restore saved setting
+ * Initialize the KV Strategy panel and context chip selectors.
  */
 function initTurboKV() {
-  // Restore saved mode
-  const saved = localStorage.getItem('ai-space-kv-mode') || 'standard';
-  state.kvMode = saved;
-  updateTurboKVBadge(saved);
-  updateTurboKVDisplay(saved);
+  // Restore saved KV strategy and context window mode
+  const savedStrategy = localStorage.getItem('ai-space-kv-strategy') || 'standard';
+  const savedCtx = localStorage.getItem('ai-space-kv-ctx') || 'standard';
+  state.kvMode = savedCtx;
+  engine.setKVStrategy(savedStrategy);
+  updateTurboKVBadge(savedStrategy, savedCtx);
 
-  // Sync card selection UI
-  const cards = document.querySelectorAll('#kv-mode-grid .kv-mode-card');
-  cards.forEach(card => {
-    card.classList.toggle('selected', card.dataset.kv === saved);
+  // Wire strategy cards
+  const stratCards = document.querySelectorAll('#kv-strategy-grid .kv-strategy-card');
+  const detailEl = document.getElementById('kv-strategy-detail');
+  stratCards.forEach(card => {
+    const id = card.dataset.strategy;
+    card.classList.toggle('selected', id === savedStrategy);
     card.addEventListener('click', () => {
-      const mode = card.dataset.kv;
-      state.kvMode = mode;
-      localStorage.setItem('ai-space-kv-mode', mode);
-      cards.forEach(c => c.classList.toggle('selected', c === card));
-      updateTurboKVBadge(mode);
-      updateTurboKVDisplay(mode);
-      const label = mode === 'standard' ? 'Standard (2K tokens)' :
-                    mode === 'extended' ? 'TurboKV 4K context' : 'TurboKV 8K context';
-      ui.showNotification(`${label} — reload model to apply`);
+      stratCards.forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      localStorage.setItem('ai-space-kv-strategy', id);
+      engine.setKVStrategy(id);
+      if (detailEl) detailEl.textContent = KV_STRATEGY_DETAILS[id] || '';
+      updateTurboKVBadge(id, localStorage.getItem('ai-space-kv-ctx') || 'standard');
+      ui.showNotification(`KV strategy: ${card.querySelector('.kv-strategy-name')?.textContent || id}`);
+    });
+  });
+  if (detailEl) detailEl.textContent = KV_STRATEGY_DETAILS[savedStrategy] || '';
+
+  // Wire context window chips
+  const ctxChips = document.querySelectorAll('.kv-ctx-chip');
+  ctxChips.forEach(chip => {
+    chip.classList.toggle('selected', chip.dataset.ctx === savedCtx);
+    chip.addEventListener('click', () => {
+      ctxChips.forEach(c => c.classList.remove('selected'));
+      chip.classList.add('selected');
+      const ctx = chip.dataset.ctx;
+      localStorage.setItem('ai-space-kv-ctx', ctx);
+      // Update state for model loading
+      state.kvMode = ctx;
+      updateTurboKVBadge(localStorage.getItem('ai-space-kv-strategy') || 'standard', ctx);
+      ui.showNotification('Context window updated — reload model to apply');
     });
   });
 
-  // Clicking the header badge scrolls to TurboKV section in settings
+  // Wire custom script editor
+  const scriptEl = document.getElementById('kv-custom-script');
+  const applyBtn = document.getElementById('kv-apply-script');
+  const clearBtn = document.getElementById('kv-clear-script');
+  const statusEl = document.getElementById('kv-script-status');
+
+  const savedScript = localStorage.getItem('ai-space-kv-script') || '';
+  if (scriptEl && savedScript) scriptEl.value = savedScript;
+
+  if (applyBtn) {
+    applyBtn.addEventListener('click', () => {
+      const script = scriptEl?.value?.trim() || '';
+      if (!script) {
+        if (statusEl) { statusEl.textContent = 'Script is empty.'; statusEl.className = 'kv-script-status err'; }
+        return;
+      }
+      try {
+        engine.setKVCustomScript(script);
+        engine.setKVStrategy('custom');
+        // Select no strategy card
+        stratCards.forEach(c => c.classList.remove('selected'));
+        localStorage.setItem('ai-space-kv-script', script);
+        localStorage.setItem('ai-space-kv-strategy', 'custom');
+        updateTurboKVBadge('custom', localStorage.getItem('ai-space-kv-ctx') || 'standard');
+        if (statusEl) { statusEl.textContent = '✓ Custom script active'; statusEl.className = 'kv-script-status ok'; }
+        ui.showNotification('Custom KV script applied');
+      } catch (err) {
+        if (statusEl) { statusEl.textContent = '✗ ' + err.message; statusEl.className = 'kv-script-status err'; }
+      }
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (scriptEl) scriptEl.value = '';
+      engine.setKVCustomScript('');
+      engine.setKVStrategy('standard');
+      localStorage.removeItem('ai-space-kv-script');
+      localStorage.setItem('ai-space-kv-strategy', 'standard');
+      stratCards.forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'standard'));
+      if (statusEl) { statusEl.textContent = ''; statusEl.className = 'kv-script-status'; }
+      updateTurboKVBadge('standard', localStorage.getItem('ai-space-kv-ctx') || 'standard');
+      ui.showNotification('KV script cleared — using Standard strategy');
+    });
+  }
+
+  // Wire model catalog cards
+  const modelCards = document.querySelectorAll('#model-catalog .model-card');
+  modelCards.forEach(card => {
+    card.addEventListener('click', () => {
+      modelCards.forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      const modelId = card.dataset.modelId;
+      const picker = document.getElementById('local-model-picker');
+      if (picker) picker.value = modelId;
+    });
+  });
+
+  // Badge click → open settings + scroll
   const badge = document.getElementById('turbo-kv-badge');
   if (badge) {
     badge.addEventListener('click', () => {
@@ -3021,6 +3161,177 @@ function initTurboKV() {
       }, 100);
     });
   }
+}
+
+// ─── Command Palette ──────────────────────────────────────────────────────────
+
+let _cmdOpen = false;
+let _cmdActiveIdx = -1;
+let _cmdItems = [];
+
+/**
+ * Build the full command list from current state.
+ * @returns {Array<{section, icon, name, desc, tag, action}>}
+ */
+function buildCommandList(query) {
+  const q = (query || '').toLowerCase().trim();
+
+  const all = [
+    // ── Actions ──
+    { section: 'Actions', icon: '✏️', name: 'New Conversation', desc: 'Clear current chat and start fresh', action: () => { handleNewConversation?.(); closeCommandPalette(); } },
+    { section: 'Actions', icon: '⚙️', name: 'Open Settings', desc: 'Configure model, cloud, KV, and more', action: () => { ui.showView('settings'); closeCommandPalette(); } },
+    { section: 'Actions', icon: '🗑️', name: 'Clear All Data', desc: 'Delete all conversations and preferences', action: () => { closeCommandPalette(); handleClearData?.(); } },
+    // ── KV Strategies ──
+    { section: 'KV Strategy', icon: '◈', name: 'KV: Standard', desc: 'Direct token trimming — no transformation', tag: 'KV', action: () => { engine.setKVStrategy('standard'); state.kvMode = 'standard'; localStorage.setItem('ai-space-kv-strategy', 'standard'); updateTurboKVBadge('standard', localStorage.getItem('ai-space-kv-ctx') || 'standard'); document.querySelectorAll('#kv-strategy-grid .kv-strategy-card').forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'standard')); ui.showNotification('KV: Standard'); closeCommandPalette(); } },
+    { section: 'KV Strategy', icon: '⟨⟩', name: 'KV: Sliding Window', desc: 'Attention-sink + recency window', tag: 'KV', action: () => { engine.setKVStrategy('sliding-window'); state.kvMode = 'sliding-window'; localStorage.setItem('ai-space-kv-strategy', 'sliding-window'); updateTurboKVBadge('sliding-window', localStorage.getItem('ai-space-kv-ctx') || 'standard'); document.querySelectorAll('#kv-strategy-grid .kv-strategy-card').forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'sliding-window')); ui.showNotification('KV: Sliding Window'); closeCommandPalette(); } },
+    { section: 'KV Strategy', icon: '◉', name: 'KV: Semantic Compress', desc: 'Importance-scored context selection', tag: 'KV', action: () => { engine.setKVStrategy('semantic-compress'); state.kvMode = 'semantic-compress'; localStorage.setItem('ai-space-kv-strategy', 'semantic-compress'); updateTurboKVBadge('semantic-compress', localStorage.getItem('ai-space-kv-ctx') || 'standard'); document.querySelectorAll('#kv-strategy-grid .kv-strategy-card').forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'semantic-compress')); ui.showNotification('KV: Semantic Compress'); closeCommandPalette(); } },
+    { section: 'KV Strategy', icon: '⚡', name: 'KV: Turbo Compress', desc: 'Maximum efficiency — bullet synopsis', tag: 'KV', action: () => { engine.setKVStrategy('turbo-compress'); state.kvMode = 'turbo-compress'; localStorage.setItem('ai-space-kv-strategy', 'turbo-compress'); updateTurboKVBadge('turbo-compress', localStorage.getItem('ai-space-kv-ctx') || 'standard'); document.querySelectorAll('#kv-strategy-grid .kv-strategy-card').forEach(c => c.classList.toggle('selected', c.dataset.strategy === 'turbo-compress')); ui.showNotification('KV: Turbo Compress'); closeCommandPalette(); } },
+  ];
+
+  // Add models
+  const models = {
+    'SmolLM2-360M-Instruct-q4f16_1-MLC': { name: 'SmolLM2 360M', desc: 'Fastest local model · 200 MB' },
+    'TinyLlama-1.1B-Chat-v0.4-q4f16_1-MLC': { name: 'TinyLlama 1.1B', desc: 'Ultra-fast chat · 640 MB' },
+    'Qwen2.5-0.5B-Instruct-q4f16_1-MLC': { name: 'Qwen 2.5 0.5B', desc: 'Ultra-fast · 350 MB' },
+    'Llama-3.2-1B-Instruct-q4f16_1-MLC': { name: 'Llama 3.2 1B', desc: 'Recommended default · 700 MB' },
+    'Qwen2.5-1.5B-Instruct-q4f16_1-MLC': { name: 'Qwen 2.5 1.5B', desc: 'Multilingual · 900 MB' },
+    'gemma-2-2b-it-q4f16_1-MLC': { name: 'Gemma 2 2B', desc: 'Google · 1.4 GB' },
+    'Llama-3.2-3B-Instruct-q4f16_1-MLC': { name: 'Llama 3.2 3B', desc: 'High quality · 2.0 GB' },
+    'Phi-3.5-mini-instruct-q4f16_1-MLC': { name: 'Phi 3.5 Mini 3.8B', desc: 'Microsoft · 2.2 GB · 16K ctx' },
+    'Mistral-7B-Instruct-v0.3-q4f16_1-MLC': { name: 'Mistral 7B v0.3', desc: 'Code + instruction · 4.1 GB' },
+    'Llama-3.1-8B-Instruct-q4f32_1-MLC': { name: 'Llama 3.1 8B', desc: 'Top-tier quality · 5.0 GB' },
+    'DeepSeek-R1-Distill-Qwen-7B-q4f16_1-MLC': { name: 'DeepSeek-R1 7B', desc: 'Reasoning + math · 4.4 GB' }
+  };
+  for (const [modelId, info] of Object.entries(models)) {
+    all.push({
+      section: 'Models',
+      icon: '🤖',
+      name: `Switch to ${info.name}`,
+      desc: info.desc,
+      tag: 'Model',
+      action: () => {
+        const picker = document.getElementById('local-model-picker');
+        if (picker) picker.value = modelId;
+        document.querySelectorAll('#model-catalog .model-card').forEach(c => c.classList.toggle('selected', c.dataset.modelId === modelId));
+        closeCommandPalette();
+        handleSwitchModel?.();
+      }
+    });
+  }
+
+  if (!q) return all;
+  return all.filter(item =>
+    item.name.toLowerCase().includes(q) ||
+    item.desc.toLowerCase().includes(q) ||
+    (item.section || '').toLowerCase().includes(q)
+  );
+}
+
+function renderCommandPalette(query) {
+  const results = document.getElementById('cmd-results');
+  if (!results) return;
+
+  _cmdItems = buildCommandList(query);
+  _cmdActiveIdx = _cmdItems.length > 0 ? 0 : -1;
+
+  // Group by section
+  const sections = {};
+  for (const item of _cmdItems) {
+    if (!sections[item.section]) sections[item.section] = [];
+    sections[item.section].push(item);
+  }
+
+  results.innerHTML = '';
+  let globalIdx = 0;
+
+  for (const [section, items] of Object.entries(sections)) {
+    const label = document.createElement('div');
+    label.className = 'cmd-section-label';
+    label.textContent = section;
+    results.appendChild(label);
+
+    for (const item of items) {
+      const idx = globalIdx++;
+      const el = document.createElement('div');
+      el.className = 'cmd-item' + (idx === 0 ? ' active' : '');
+      el.dataset.idx = idx;
+      el.innerHTML = `
+        <div class="cmd-item-icon">${item.icon}</div>
+        <div class="cmd-item-text">
+          <div class="cmd-item-name">${item.name}</div>
+          <div class="cmd-item-desc">${item.desc}</div>
+        </div>
+        ${item.tag ? `<span class="cmd-item-tag">${item.tag}</span>` : ''}
+      `;
+      el.addEventListener('click', () => { item.action?.(); });
+      el.addEventListener('mouseenter', () => {
+        document.querySelectorAll('.cmd-item').forEach(e => e.classList.remove('active'));
+        el.classList.add('active');
+        _cmdActiveIdx = idx;
+      });
+      results.appendChild(el);
+    }
+  }
+
+  if (_cmdItems.length === 0) {
+    results.innerHTML = '<div style="padding:24px;text-align:center;color:var(--fg-dim);font-size:14px;">No commands found</div>';
+  }
+}
+
+function openCommandPalette() {
+  _cmdOpen = true;
+  const palette = document.getElementById('cmd-palette');
+  const backdrop = document.getElementById('cmd-backdrop');
+  const input = document.getElementById('cmd-search');
+  if (palette) palette.classList.add('open');
+  if (backdrop) backdrop.classList.add('open');
+  if (input) { input.value = ''; input.focus(); }
+  renderCommandPalette('');
+}
+
+function closeCommandPalette() {
+  _cmdOpen = false;
+  document.getElementById('cmd-palette')?.classList.remove('open');
+  document.getElementById('cmd-backdrop')?.classList.remove('open');
+}
+
+function initCommandPalette() {
+  const backdrop = document.getElementById('cmd-backdrop');
+  const search = document.getElementById('cmd-search');
+
+  if (backdrop) backdrop.addEventListener('click', closeCommandPalette);
+
+  if (search) {
+    search.addEventListener('input', (e) => renderCommandPalette(e.target.value));
+    search.addEventListener('keydown', (e) => {
+      const items = document.querySelectorAll('.cmd-item');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        _cmdActiveIdx = Math.min(_cmdActiveIdx + 1, _cmdItems.length - 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        _cmdActiveIdx = Math.max(_cmdActiveIdx - 1, 0);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        _cmdItems[_cmdActiveIdx]?.action?.();
+        return;
+      } else if (e.key === 'Escape') {
+        closeCommandPalette();
+        return;
+      }
+      items.forEach((el, i) => el.classList.toggle('active', i === _cmdActiveIdx));
+      items[_cmdActiveIdx]?.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  // Global shortcut: Cmd+K / Ctrl+K
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      _cmdOpen ? closeCommandPalette() : openCommandPalette();
+    }
+    if (e.key === 'Escape' && _cmdOpen) closeCommandPalette();
+  });
 }
 
 export { initApp };
