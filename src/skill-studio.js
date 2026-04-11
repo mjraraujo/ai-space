@@ -3,6 +3,9 @@
  * Converts natural language into an approval-aware AI Space skill manifest + execution prompt.
  */
 
+/** Maximum input length for skill drafting to prevent context overflow. */
+const MAX_SKILL_INPUT_LENGTH = 4_000;
+
 const RELAY_ACTION_HINTS = {
   shortcuts: ['Build relay artifact', 'Create reminder checklist', 'Save for Siri shortcut'],
   browser: ['Build browser relay', 'Extract page context', 'Prepare share summary'],
@@ -167,7 +170,8 @@ export function buildSkillPrompt(manifest, currentInput = '') {
 }
 
 export function draftSkillFromText(text, options = {}) {
-  const cleanedInput = stripSkillCommand(text) || String(text || '').trim() || 'Create a reusable local workflow';
+  const rawInput = String(text || '').trim().slice(0, MAX_SKILL_INPUT_LENGTH);
+  const cleanedInput = stripSkillCommand(rawInput) || rawInput || 'Create a reusable local workflow';
   const relayId = options.relayId && options.relayId !== 'auto'
     ? options.relayId
     : inferRelayId(cleanedInput);

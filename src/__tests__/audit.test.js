@@ -293,3 +293,45 @@ describe('Audit', () => {
     });
   });
 });
+
+// ─── queue size cap ───────────────────────────────────────────────────────────
+
+describe('queue size cap', () => {
+  it('caps queue at MAX_QUEUE_SIZE (500) when init is never called', async () => {
+    const audit = new Audit();
+    // Queue 600 entries without calling init()
+    for (let i = 0; i < 600; i++) {
+      await audit.log('context_read', { i });
+    }
+    // Queue should be capped at 500
+    expect(audit._queue.length).toBeLessThanOrEqual(500);
+  });
+
+  it('oldest entries are dropped when cap is exceeded', async () => {
+    const audit = new Audit();
+    for (let i = 0; i < 510; i++) {
+      await audit.log('context_read', { seq: i });
+    }
+    // The first entry (seq: 0) should have been evicted
+    const firstDetail = audit._queue[0].details?.seq ?? -1;
+    expect(firstDetail).toBeGreaterThan(0);
+  });
+});
+
+// ─── clearLog() ───────────────────────────────────────────────────────────────
+
+describe('clearLog()', () => {
+  it('returns false when not ready', async () => {
+    const audit = new Audit();
+    expect(await audit.clearLog()).toBe(false);
+  });
+
+  it('calls clearAuditLog on memory when ready', async () => {
+    const audit = new Audit();
+    const memory = { ...makeMockMemory(), clearAuditLog: vi.fn().mockResolvedValue(undefined) };
+    await audit.init(memory);
+    const result = await audit.clearLog();
+    expect(result).toBe(true);
+    expect(memory.clearAuditLog).toHaveBeenCalledOnce();
+  });
+});

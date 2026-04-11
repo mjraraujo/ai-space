@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ToolRunner } from '../tool-runner.js';
+import { ToolRunner, isPrivateUrl } from '../tool-runner.js';
 
 describe('ToolRunner', () => {
   let runner;
@@ -308,5 +308,74 @@ describe('ToolRunner', () => {
         expect(def.function.description).toBeTruthy();
       });
     });
+  });
+});
+
+describe('isPrivateUrl()', () => {
+  it('blocks localhost', () => {
+    expect(isPrivateUrl('http://localhost/api')).toBe(true);
+  });
+
+  it('blocks localhost subdomains', () => {
+    expect(isPrivateUrl('http://api.localhost/')).toBe(true);
+  });
+
+  it('blocks loopback 127.0.0.1', () => {
+    expect(isPrivateUrl('http://127.0.0.1/secret')).toBe(true);
+  });
+
+  it('blocks full 127.x.x.x range', () => {
+    expect(isPrivateUrl('http://127.255.0.1/')).toBe(true);
+  });
+
+  it('blocks RFC-1918 10.x.x.x', () => {
+    expect(isPrivateUrl('http://10.0.0.1/')).toBe(true);
+    expect(isPrivateUrl('http://10.255.255.255/')).toBe(true);
+  });
+
+  it('blocks RFC-1918 172.16-31.x.x', () => {
+    expect(isPrivateUrl('http://172.16.0.1/')).toBe(true);
+    expect(isPrivateUrl('http://172.31.255.255/')).toBe(true);
+  });
+
+  it('does not block 172.15.x.x (outside private range)', () => {
+    expect(isPrivateUrl('https://172.15.0.1/')).toBe(false);
+  });
+
+  it('blocks RFC-1918 192.168.x.x', () => {
+    expect(isPrivateUrl('http://192.168.1.1/')).toBe(true);
+  });
+
+  it('blocks link-local 169.254.x.x', () => {
+    expect(isPrivateUrl('http://169.254.169.254/latest/meta-data/')).toBe(true);
+  });
+
+  it('blocks IPv6 loopback [::1]', () => {
+    expect(isPrivateUrl('http://[::1]/path')).toBe(true);
+  });
+
+  it('blocks IPv6 link-local fe80::', () => {
+    expect(isPrivateUrl('http://[fe80::1]/')).toBe(true);
+  });
+
+  it('blocks file:// scheme', () => {
+    expect(isPrivateUrl('file:///etc/passwd')).toBe(true);
+  });
+
+  it('blocks data: scheme', () => {
+    expect(isPrivateUrl('data:text/plain,hello')).toBe(true);
+  });
+
+  it('blocks malformed URLs', () => {
+    expect(isPrivateUrl('not-a-url')).toBe(true);
+    expect(isPrivateUrl('')).toBe(true);
+  });
+
+  it('allows public HTTP URL', () => {
+    expect(isPrivateUrl('http://example.com/')).toBe(false);
+  });
+
+  it('allows public HTTPS URL', () => {
+    expect(isPrivateUrl('https://api.openai.com/v1/chat/completions')).toBe(false);
   });
 });

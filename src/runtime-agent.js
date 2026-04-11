@@ -128,6 +128,24 @@ export class RuntimeAgent {
       const MAX_JOB_MS = 90000;
       const MAX_LOG_LINE = 1200;
 
+      function isPrivateUrl(urlStr) {
+        try {
+          const parsed = new URL(urlStr);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
+          const host = parsed.hostname.toLowerCase();
+          if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '[::1]') return true;
+          const parts = host.split('.').map(Number);
+          if (parts.length === 4 && parts.every(n => n >= 0 && n <= 255)) {
+            if (parts[0] === 127 || parts[0] === 10 || parts[0] === 0) return true;
+            if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+            if (parts[0] === 192 && parts[1] === 168) return true;
+            if (parts[0] === 169 && parts[1] === 254) return true;
+          }
+          if (host.startsWith('[fe80:') || host.startsWith('[fc') || host.startsWith('[fd')) return true;
+          return false;
+        } catch { return true; }
+      }
+
       function truncate(text) {
         const str = String(text ?? '');
         return str.length > MAX_OUTPUT ? str.slice(0, MAX_OUTPUT) + '\\n...truncated...' : str;
@@ -272,6 +290,10 @@ export class RuntimeAgent {
           const url = args[0];
           const method = (args[1] || 'GET').toUpperCase();
           if (!url) return { ok: false, error: 'Missing URL', output: '' };
+
+          if (isPrivateUrl(url)) {
+            return { ok: false, error: 'Blocked: private/internal URLs are not allowed.', output: '', status: 0 };
+          }
 
           const res = await fetch(url, { method });
           const text = await res.text();

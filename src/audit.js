@@ -15,6 +15,9 @@ const AUDIT_TYPES = [
   'internet_consult'
 ];
 
+/** Maximum pre-init queue size to prevent unbounded memory growth. */
+const MAX_QUEUE_SIZE = 500;
+
 export class Audit {
   constructor() {
     this.memory = null;
@@ -82,8 +85,11 @@ export class Audit {
         console.warn('Audit log save failed:', err);
       }
     } else {
-      // Queue for later
+      // Queue for later — evict oldest if cap exceeded to prevent unbounded growth
       this._queue.push(entry);
+      if (this._queue.length > MAX_QUEUE_SIZE) {
+        this._queue.shift();
+      }
     }
 
     return entry;
@@ -143,5 +149,43 @@ export class Audit {
     }
 
     return stats;
+  }
+
+  /**
+   * Clear all audit log entries from persistent storage.
+   * @returns {Promise<boolean>}
+   */
+  async clearLog() {
+    if (!this._ready || !this.memory) return false;
+    try {
+      await this.memory.clearAuditLog?.();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Trim the audit log to the N most recent entries.
+   * @param {number} [maxEntries=1000] - Maximum entries to keep
+   * @returns {Promise<number>} number of entries retained
+   */
+  async trimLog(maxEntries = 1000) {
+    if (!this._ready || !this.memory) return 0;
+    try {
+      const all = await this.memory.getAuditLog();
+      if (all.length <= maxEntries) return all.length;
+      const sorted = all.sort((a, b) =>
+        (b.timestamp || b._timestamp || 0) - (a.timestamp || a._timestamp || 0)
+      );
+      const toKeep = sorted.slice(0, maxEntries);
+      const toDelete = sorted.slice(maxEntries);
+      for (const entry of toDelete) {
+        await this.memory.deleteAuditEntry?.(entry.id || entry._id);
+      }
+      return toKeep.length;
+    } catch {
+      return 0;
+    }
   }
 }
