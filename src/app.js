@@ -643,7 +643,7 @@ function initMemoryInBackground() {
 
       // Load saved TTS preference
       const savedTTS = await memory.getPreference('tts_enabled');
-      if (savedTTS !== null && savedTTS !== undefined) {
+      if (savedTTS !== undefined && savedTTS !== null) {
         voice.ttsEnabled = !!savedTTS;
         const ttsEl = document.getElementById('tts-toggle');
         if (ttsEl) ttsEl.checked = voice.ttsEnabled;
