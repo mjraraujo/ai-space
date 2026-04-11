@@ -170,7 +170,16 @@ export class Memory {
       const store = tx.objectStore(storeName);
       const request = store.put(record);
       request.onsuccess = () => resolve(true);
-      request.onerror = () => reject(request.error);
+      request.onerror = () => {
+        const error = request.error || tx.error;
+        // Handle quota exceeded errors gracefully
+        if (error?.name === 'QuotaExceededError' || error?.code === 22) {
+          console.warn(`[Memory] Storage quota exceeded for "${storeName}". Consider clearing old data.`);
+          reject(new Error('Storage quota exceeded. Please free up space by deleting old conversations.'));
+          return;
+        }
+        reject(error);
+      };
     });
   }
 
