@@ -54,7 +54,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) {
     // Cache model weights from huggingface (exact hostname match for security)
     const hostname = url.hostname;
-    if (hostname === 'huggingface.co' || hostname.endsWith('.huggingface.co') || url.pathname.endsWith('.wasm') || url.pathname.endsWith('.bin')) {
+    if (hostname === 'huggingface.co' || (hostname.endsWith('.huggingface.co') && hostname.length > '.huggingface.co'.length) || url.pathname.endsWith('.wasm') || url.pathname.endsWith('.bin')) {
       event.respondWith(cacheFirst(event.request, MODEL_CACHE));
     }
     return;

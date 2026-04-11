@@ -641,6 +641,14 @@ function initMemoryInBackground() {
         voice._cachedVoice = null;
       }
 
+      // Load saved TTS preference
+      const savedTTS = await memory.getPreference('tts_enabled');
+      if (savedTTS !== null && savedTTS !== undefined) {
+        voice.ttsEnabled = !!savedTTS;
+        const ttsEl = document.getElementById('tts-toggle');
+        if (ttsEl) ttsEl.checked = voice.ttsEnabled;
+      }
+
       // Restore last conversation
       await restoreLastConversation();
     } catch (err) {
@@ -1360,6 +1368,16 @@ function wireEventListeners() {
     });
   }
 
+  // TTS toggle
+  const ttsToggle = document.getElementById('tts-toggle');
+  if (ttsToggle) {
+    ttsToggle.checked = voice.ttsEnabled;
+    ttsToggle.addEventListener('change', () => {
+      voice.ttsEnabled = ttsToggle.checked;
+      savePref('tts_enabled', ttsToggle.checked);
+    });
+  }
+
   // Local model switch
   const switchModelBtn = document.getElementById('switch-model-btn');
   if (switchModelBtn) switchModelBtn.addEventListener('click', handleSwitchModel);
@@ -1823,6 +1841,7 @@ function renderChatStatusBar() {
  * Handle send
  */
 function handleSend() {
+  if (state.isGenerating) return;
   const text = ui.getInputValue();
   if (!text) return;
   sendMessage(text);
