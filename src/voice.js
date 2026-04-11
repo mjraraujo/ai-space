@@ -23,7 +23,7 @@ export class Voice {
     this.onSilenceDetected = null; // callback(text) - conversation mode: user stopped talking
     this.conversationMode = false; // continuous listen -> respond -> listen loop
     this.silenceTimeout = 2000; // ms of silence before auto-sending (2s for natural pauses)
-    this.preferredLang = (typeof navigator !== 'undefined' && navigator.language) || 'en-US';
+    this.preferredLang = (typeof navigator !== 'undefined' && typeof navigator.language === 'string' && navigator.language) || 'en-US';
     this.preferredVoiceIndex = -1; // -1 = auto-pick best
     this._recognition = null;
     this._recognitionResolve = null;
