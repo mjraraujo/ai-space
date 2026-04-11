@@ -4,6 +4,12 @@
  * No getUserMedia needed — uses native file picker UI.
  */
 
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+const ALLOWED_MIME_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'image/bmp', 'image/svg+xml', 'image/avif', 'image/heic', 'image/heif'
+]);
+
 export class Camera {
   constructor() {
     // Pre-create hidden file inputs so they're ready
@@ -110,6 +116,14 @@ export class Camera {
    */
   _readFile(file) {
     return new Promise((resolve, reject) => {
+      if (file.size > MAX_FILE_SIZE) {
+        reject(new Error(`Image too large (${Math.round(file.size / 1024 / 1024)}MB). Maximum is ${MAX_FILE_SIZE / 1024 / 1024}MB.`));
+        return;
+      }
+      if (file.type && !ALLOWED_MIME_TYPES.has(file.type)) {
+        reject(new Error(`Unsupported file type: ${file.type}. Only image files are allowed.`));
+        return;
+      }
       const reader = new FileReader();
       reader.onload = () => {
         resolve({
@@ -162,6 +176,7 @@ export class Camera {
           ctx.imageSmoothingQuality = 'high';
           ctx.drawImage(img, 0, 0, width, height);
 
+          // Canvas re-encoding naturally strips EXIF metadata (GPS, camera info, etc.)
           // Export as JPEG with 80% quality
           const result = canvas.toDataURL('image/jpeg', 0.8);
           resolve(result);
@@ -174,6 +189,37 @@ export class Camera {
       img.onerror = () => {
         reject(new Error('Failed to load image for resizing'));
       };
+      img.src = dataUrl;
+    });
+  }
+
+  /**
+   * Strip EXIF/metadata from an image by re-encoding through canvas.
+   * Useful when resize() is not needed but metadata removal is required.
+   * @param {string} dataUrl - Source image as data URL
+   * @returns {Promise<string>} Clean JPEG data URL without EXIF metadata
+   */
+  stripMetadata(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(dataUrl);
+            return;
+          }
+          ctx.drawImage(img, 0, 0);
+          // Canvas re-encoding strips all EXIF metadata
+          resolve(canvas.toDataURL('image/jpeg', 0.92));
+        } catch {
+          resolve(dataUrl);
+        }
+      };
+      img.onerror = () => reject(new Error('Failed to load image for metadata stripping'));
       img.src = dataUrl;
     });
   }
