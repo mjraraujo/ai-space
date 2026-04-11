@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 
 function copyAssetsPlugin() {
@@ -21,14 +21,18 @@ function copyAssetsPlugin() {
         }
       }
 
-      // Copy public/icons
+      // Copy public/icons (all files)
       const iconsDir = resolve(outDir, 'icons');
       if (!existsSync(iconsDir)) {
         mkdirSync(iconsDir, { recursive: true });
       }
-      const iconSrc = resolve(__dirname, 'public/icons/icon.svg');
-      if (existsSync(iconSrc)) {
-        writeFileSync(resolve(iconsDir, 'icon.svg'), readFileSync(iconSrc, 'utf-8'));
+      const iconsSrc = resolve(__dirname, 'public/icons');
+      if (existsSync(iconsSrc)) {
+        for (const file of readdirSync(iconsSrc)) {
+          const srcFile = resolve(iconsSrc, file);
+          const destFile = resolve(iconsDir, file);
+          writeFileSync(destFile, readFileSync(srcFile));
+        }
       }
     }
   };
