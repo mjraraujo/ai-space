@@ -31,6 +31,9 @@ const CHARS_PER_TOKEN = 4;
 /** Minimum tokens guaranteed for the most-recent message */
 const MIN_RECENT_TOKENS = 200;
 
+/** Maximum allowed length for a user-provided custom KV script (characters). */
+const MAX_CUSTOM_SCRIPT_LENGTH = 4_000;
+
 // ─── Built-in strategy implementations ──────────────────────────────────────
 
 /**
@@ -397,11 +400,15 @@ export class KVEngine {
       return;
     }
 
+    if (scriptSource.length > MAX_CUSTOM_SCRIPT_LENGTH) {
+      throw new Error(`KVEngine: custom script too long (max ${MAX_CUSTOM_SCRIPT_LENGTH} characters)`);
+    }
+
     try {
       // eslint-disable-next-line no-new-func
       const fn = new Function('messages', 'budget', scriptSource);
-      // Validate it returns an array (smoke test)
-      const probe = fn([], 1000);
+      // Validate it returns an array (smoke test with an immutable frozen input)
+      const probe = fn(Object.freeze([]), 1000);
       if (!Array.isArray(probe)) {
         throw new Error('Custom script must return an array of messages');
       }

@@ -1,17 +1,23 @@
-const CACHE_VERSION = 'ai-space-v11';
+const CACHE_VERSION = 'ai-space-v12';
 const MODEL_CACHE = 'ai-space-models-v1';
+const MAX_CACHE_ITEMS = 200;
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
-  './icons/icon.svg'
+  './icons/icon.svg',
+  './icons/apple-touch-icon.png',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/favicon.ico'
 ];
 
 // Install: activate immediately
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(APP_SHELL)).catch(() => {
-      // Ignore precache failures and let runtime cache handle it.
+    caches.open(CACHE_VERSION).then((cache) => cache.addAll(APP_SHELL)).catch((err) => {
+      // Log precache failures for debugging; runtime cache will handle missing assets.
+      console.warn('[SW] Precache failed:', err?.message || err);
     })
   );
   self.skipWaiting();
@@ -26,7 +32,8 @@ self.addEventListener('activate', (event) => {
           .filter((key) => key !== CACHE_VERSION && key !== MODEL_CACHE)
           .map((key) => caches.delete(key))
       );
-    }).then(() => self.clients.claim())
+    }).then(() => limitCacheSize(CACHE_VERSION, MAX_CACHE_ITEMS))
+      .then(() => self.clients.claim())
   );
 });
 
@@ -45,8 +52,9 @@ self.addEventListener('fetch', (event) => {
 
   // Skip cross-origin CDN requests (web-llm from esm.run etc) — let them go to network
   if (url.origin !== self.location.origin) {
-    // But cache model weights from huggingface
-    if (url.hostname.includes('huggingface') || url.pathname.includes('wasm') || url.pathname.includes('.bin')) {
+    // Cache model weights from huggingface (exact hostname match for security)
+    const hostname = url.hostname;
+    if (hostname === 'huggingface.co' || hostname.endsWith('.huggingface.co') || url.pathname.endsWith('.wasm') || url.pathname.endsWith('.bin')) {
       event.respondWith(cacheFirst(event.request, MODEL_CACHE));
     }
     return;
@@ -184,4 +192,21 @@ function openShareDB() {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+/**
+ * Evict oldest entries when a cache exceeds the item limit.
+ * Called after activate to keep storage usage bounded.
+ */
+async function limitCacheSize(cacheName, maxItems) {
+  try {
+    const cache = await caches.open(cacheName);
+    const keys = await cache.keys();
+    if (keys.length > maxItems) {
+      const toDelete = keys.slice(0, keys.length - maxItems);
+      await Promise.all(toDelete.map((key) => cache.delete(key)));
+    }
+  } catch {
+    // Non-critical — cache eviction failure is safe to ignore.
+  }
 }

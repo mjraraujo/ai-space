@@ -88,6 +88,9 @@ const PROVIDER_PRESETS = {
   }
 };
 
+/** Maximum content length (characters) allowed in a relay control envelope. */
+const MAX_RELAY_CONTENT_LENGTH = 32_000;
+
 export class RelayHub {
   getRelays() {
     return Object.values(RELAYS);
@@ -102,10 +105,16 @@ export class RelayHub {
   }
 
   buildControlEnvelope(relayId, actionId, content) {
+    const safeRelay = RELAYS[relayId] ? relayId : 'device';
+    const safeAction = ACTIONS[actionId] ? actionId : 'summarize';
+    let safeContent = (content || '').trim();
+    if (safeContent.length > MAX_RELAY_CONTENT_LENGTH) {
+      safeContent = safeContent.slice(0, MAX_RELAY_CONTENT_LENGTH) + '\n…[truncated]';
+    }
     return {
-      relay: relayId,
-      action: actionId,
-      content: (content || '').trim(),
+      relay: safeRelay,
+      action: safeAction,
+      content: safeContent,
       createdAt: new Date().toISOString(),
       constraints: {
         localFirst: true,

@@ -180,7 +180,9 @@ export class SkillRegistry {
       if (this._disabled.has(id)) continue;
       try {
         if (await skill.shouldHandle(input, ctx)) return skill;
-      } catch {}
+      } catch (err) {
+        console.warn(`[SkillRegistry] shouldHandle error in skill "${id}":`, err?.message || err);
+      }
     }
     return null;
   }

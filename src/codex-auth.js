@@ -31,6 +31,22 @@ export function clearClientIdOverride() {
 }
 export function getTokenUrl() { return _HOST + _TPATH; }
 
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * Create a fetch with automatic timeout.
+ * Falls back to AbortController + setTimeout for browsers without AbortSignal.timeout.
+ */
+function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
+  const mergedSignal = options.signal
+    ? options.signal
+    : controller.signal;
+  return fetch(url, { ...options, signal: mergedSignal })
+    .finally(() => clearTimeout(timeoutId));
+}
+
 async function readErrorText(resp) {
   try {
     const asJson = await resp.clone().json();
@@ -48,7 +64,7 @@ async function readErrorText(resp) {
 export async function requestDeviceCode() {
   // Preferred endpoint used by Codex web auth flow.
   try {
-    const resp = await fetch(getAuthIssuer() + '/api/accounts/deviceauth/usercode', {
+    const resp = await fetchWithTimeout(getAuthIssuer() + '/api/accounts/deviceauth/usercode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_id: getClientId() })
@@ -76,7 +92,7 @@ export async function requestDeviceCode() {
     scope: AUTH_SCOPE
   });
 
-  const fallbackResp = await fetch(getAuthIssuer() + '/oauth/device/code', {
+  const fallbackResp = await fetchWithTimeout(getAuthIssuer() + '/oauth/device/code', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body
@@ -107,7 +123,7 @@ export async function pollForAuth(deviceAuthId, userCode, intervalMs, maxWaitMs)
   while (Date.now() - start < maxWaitMs) {
     await new Promise(r => setTimeout(r, intervalMs));
 
-    const resp = await fetch(getAuthIssuer() + '/api/accounts/deviceauth/token', {
+    const resp = await fetchWithTimeout(getAuthIssuer() + '/api/accounts/deviceauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode })
@@ -129,7 +145,7 @@ export async function pollForAuth(deviceAuthId, userCode, intervalMs, maxWaitMs)
 async function pollForDirectTokenAfterApproval(deviceAuthId, userCode, intervalMs, attempts = 4) {
   for (let i = 0; i < attempts; i++) {
     await new Promise((r) => setTimeout(r, intervalMs));
-    const resp = await fetch(getAuthIssuer() + '/api/accounts/deviceauth/token', {
+    const resp = await fetchWithTimeout(getAuthIssuer() + '/api/accounts/deviceauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode })
@@ -162,7 +178,7 @@ async function pollForOAuthDeviceToken(deviceCode, intervalMs, maxWaitMs, client
       client_id: clientId
     });
 
-    const resp = await fetch(getTokenUrl(), {
+    const resp = await fetchWithTimeout(getTokenUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body
@@ -206,7 +222,7 @@ export async function exchangeToken(authorizationCode, codeVerifier, clientIdOve
     code_verifier: codeVerifier
   });
 
-  const resp = await fetch(getTokenUrl(), {
+  const resp = await fetchWithTimeout(getTokenUrl(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body

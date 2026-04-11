@@ -73,6 +73,9 @@ const MIN_TOKEN_FLOOR = 100;
 /** Approximate characters per token for budget estimation (conservative). */
 const CHARS_PER_TOKEN = 4;
 
+/** Maximum retries for adapter initialization on transient failures. */
+const MAX_INIT_RETRIES = 2;
+
 export class AIEngine {
   constructor() {
     // ─── Adapter layer (new) ──────────────────────────────────────────────
@@ -222,8 +225,26 @@ export class AIEngine {
       this.engine = this._adapter;
       this.status = 'ready';
       this._kvMode = requestedKvMode;
+      this._initRetries = 0;
       return true;
     } catch (err) {
+      // Don't retry validation errors or user-facing configuration issues
+      const isRetryable = !(
+        err.message?.includes('not configured') ||
+        err.message?.includes('not available') ||
+        err.message?.includes('Unknown model') ||
+        err.message?.includes('endpoint and apiKey are required')
+      );
+
+      if (isRetryable && (this._initRetries || 0) < MAX_INIT_RETRIES) {
+        this._initRetries = (this._initRetries || 0) + 1;
+        const delay = Math.min(1000 * Math.pow(2, this._initRetries - 1), 5000);
+        console.warn(`[AIEngine] init failed, retrying (${this._initRetries}/${MAX_INIT_RETRIES}) in ${delay}ms:`, err?.message);
+        await new Promise(r => setTimeout(r, delay));
+        return this.init(modelId, onProgress, options);
+      }
+
+      this._initRetries = 0;
       this.status = 'error';
       throw err;
     }

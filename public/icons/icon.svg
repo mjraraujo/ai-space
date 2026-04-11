@@ -1,7 +1,56 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="96" fill="#0a0a0a"/>
-  <circle cx="256" cy="256" r="120" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.3"/>
-  <circle cx="256" cy="256" r="80" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.5"/>
-  <circle cx="256" cy="256" r="40" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.7"/>
-  <circle cx="256" cy="256" r="6" fill="#ffffff" opacity="0.9"/>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#0f1024"/>
+      <stop offset="100%" stop-color="#07080e"/>
+    </radialGradient>
+    <radialGradient id="core-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.9"/>
+      <stop offset="40%" stop-color="#7c5cfc" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#7c5cfc" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ring1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7c5cfc" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#3b8ef0" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#7c5cfc" stop-opacity="0.8"/>
+    </linearGradient>
+    <linearGradient id="ring2" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b8ef0" stop-opacity="0.5"/>
+      <stop offset="50%" stop-color="#a78bfa" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#3b8ef0" stop-opacity="0.5"/>
+    </linearGradient>
+    <linearGradient id="ring3" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#7c5cfc" stop-opacity="0.15"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft-glow">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- Ambient glow -->
+  <circle cx="256" cy="256" r="160" fill="url(#core-glow)" filter="url(#soft-glow)"/>
+  <!-- Outer orbital ring -->
+  <circle cx="256" cy="256" r="145" fill="none" stroke="url(#ring3)" stroke-width="1" opacity="0.4"/>
+  <!-- Middle ring with dash pattern -->
+  <circle cx="256" cy="256" r="110" fill="none" stroke="url(#ring2)" stroke-width="1.5" stroke-dasharray="8 12" opacity="0.6"/>
+  <!-- Inner ring -->
+  <circle cx="256" cy="256" r="75" fill="none" stroke="url(#ring1)" stroke-width="2" opacity="0.7" filter="url(#glow)"/>
+  <!-- Orbital dots -->
+  <circle cx="256" cy="111" r="4" fill="#3b8ef0" opacity="0.7"/>
+  <circle cx="370" cy="186" r="3" fill="#a78bfa" opacity="0.5"/>
+  <circle cx="142" cy="326" r="3.5" fill="#7c5cfc" opacity="0.6"/>
+  <circle cx="355" cy="350" r="2.5" fill="#3b8ef0" opacity="0.4"/>
+  <!-- Core sphere with gradient -->
+  <circle cx="256" cy="256" r="28" fill="#7c5cfc" opacity="0.15"/>
+  <circle cx="256" cy="256" r="18" fill="#7c5cfc" opacity="0.3"/>
+  <circle cx="256" cy="256" r="8" fill="#a78bfa" opacity="0.9" filter="url(#glow)"/>
+  <!-- Highlight arc (top-left specular) -->
+  <path d="M 200 200 A 80 80 0 0 1 312 200" fill="none" stroke="#ffffff" stroke-width="0.8" opacity="0.12"/>
 </svg>

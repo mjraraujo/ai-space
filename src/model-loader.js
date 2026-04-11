@@ -293,6 +293,17 @@ export class BrowserModelLoader {
    * @returns {Promise<void>}
    */
   async downloadAndCache(modelId, sourceUrl, onProgress) {
+    // Security: only allow HTTPS downloads of model weights
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(sourceUrl);
+    } catch {
+      throw new Error(`Invalid download URL: ${sourceUrl}`);
+    }
+    if (parsedUrl.protocol !== 'https:') {
+      throw new Error('Model downloads must use HTTPS for security.');
+    }
+
     this._activeDownload = new AbortController();
 
     const report = (phase, ratio, text, extra = {}) => {
@@ -461,17 +472,25 @@ export class BrowserModelLoader {
 // ─── Singleton factory ────────────────────────────────────────────────────────
 
 let _loaderInstance = null;
+/** @type {Promise<BrowserModelLoader>|null} */
+let _loaderInitPromise = null;
 
 /**
  * Get the application-wide BrowserModelLoader singleton.
- * Initializes on first call.
+ * Initializes on first call. Concurrent callers share the same init promise
+ * to avoid creating multiple instances.
  * @returns {Promise<BrowserModelLoader>}
  */
 export async function getModelLoader() {
-  if (!_loaderInstance) {
-    _loaderInstance = new BrowserModelLoader();
-    await _loaderInstance.init();
-    _loaderInstance.registerDefaults();
+  if (_loaderInstance) return _loaderInstance;
+  if (!_loaderInitPromise) {
+    _loaderInitPromise = (async () => {
+      const loader = new BrowserModelLoader();
+      await loader.init();
+      loader.registerDefaults();
+      _loaderInstance = loader;
+      return loader;
+    })();
   }
-  return _loaderInstance;
+  return _loaderInitPromise;
 }

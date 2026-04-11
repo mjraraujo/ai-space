@@ -269,3 +269,31 @@ describe('KVEngine', () => {
     }
   });
 });
+
+// ─── setCustomScript() validation ────────────────────────────────────────────
+
+describe('setCustomScript() validation', () => {
+  let kv;
+  beforeEach(() => {
+    kv = new KVEngine();
+  });
+
+  it('rejects script exceeding MAX_CUSTOM_SCRIPT_LENGTH', () => {
+    // Build a valid script that is too long
+    const longScript = `
+      // ${'a'.repeat(4100)}
+      return messages;
+    `;
+    expect(() => kv.setCustomScript(longScript)).toThrow(/too long/);
+  });
+
+  it('accepts a valid short script', () => {
+    expect(() => kv.setCustomScript('return messages;')).not.toThrow();
+  });
+
+  it('clears compiled fn when empty string passed', () => {
+    kv.setCustomScript('return messages;');
+    kv.setCustomScript('');
+    expect(kv._compiledCustom).toBeNull();
+  });
+});

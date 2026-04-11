@@ -130,7 +130,7 @@ function buildTaskModeGuidance(text) {
  * @returns {string}
  */
 export function buildEnhancedQuery(userText, webContext = '') {
-  const raw = String(userText || '');
+  const raw = String(userText || '').slice(0, 16_000); // guard against enormous inputs
   if (!raw) return '';
 
   if (
@@ -164,9 +164,9 @@ export function sanitizeModelOutput(text) {
 
   let output = String(text);
 
-  output = output.replace(/\b(I am|I'm)\s+(Phi|GPT|ChatGPT|Gemini|Bard|Copilot|Claude)\b/gi, 'I am AI Space');
+  output = output.replace(/\b(I am|I'm)\s+(Phi|GPT|ChatGPT|Gemini|Bard|Copilot|Claude|LLaMA|Llama|Mistral|Qwen|SmolLM|TinyLlama)\b/gi, 'I am AI Space');
   output = output.replace(/^As an AI language model,?\s*/i, '');
-  output = output.replace(/^(Certainly!|Of course!|Sure!|Great question!|Absolutely!)\s*/i, '');
+  output = output.replace(/^(Certainly!|Of course!|Sure!|Great question!|Absolutely!|Happy to help!)\s*/i, '');
 
   const sentences = output.split(/(?<=[.!?])\s+/).filter(Boolean);
   const seen = new Set();

@@ -14,6 +14,41 @@
 
 import { RuntimeAgent } from './runtime-agent.js';
 
+const TOOL_TIMEOUT_MS = 30_000;
+
+/**
+ * Block fetch_url from reaching private/internal networks (SSRF protection).
+ * Validates the URL scheme and hostname before executing the request.
+ */
+function isPrivateUrl(urlStr) {
+  let parsed;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    return true; // malformed → block
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
+
+  const host = parsed.hostname.toLowerCase();
+  // IPv6 loopback
+  if (host === '[::1]' || host === '::1') return true;
+  // IPv4 loopback and private ranges
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  const parts = host.split('.').map(Number);
+  if (parts.length === 4 && parts.every(n => n >= 0 && n <= 255)) {
+    if (parts[0] === 127) return true;
+    if (parts[0] === 10) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 169 && parts[1] === 254) return true;
+    if (parts[0] === 0) return true;
+  }
+  // IPv6 private prefixes
+  if (host.startsWith('[fe80:') || host.startsWith('[fc') || host.startsWith('[fd')) return true;
+
+  return false;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /**
@@ -140,7 +175,12 @@ export class ToolRunner extends RuntimeAgent {
     }
 
     try {
-      const output = await tool.execute(args, ctx);
+      let timerId;
+      const timeoutPromise = new Promise((_, reject) => {
+        timerId = setTimeout(() => reject(new Error(`Tool "${toolName}" timed out after ${TOOL_TIMEOUT_MS}ms`)), TOOL_TIMEOUT_MS);
+      });
+      const output = await Promise.race([tool.execute(args, ctx), timeoutPromise]);
+      clearTimeout(timerId);
       return {
         callId,
         toolName,
@@ -209,6 +249,9 @@ export class ToolRunner extends RuntimeAgent {
       },
       permissions: ['network'],
       execute: async ({ url, method = 'GET' }) => {
+        if (isPrivateUrl(url)) {
+          return { status: 0, ok: false, url, content: 'Blocked: private/internal URLs are not allowed.' };
+        }
         const res = await fetch(url, { method });
         const text = await res.text();
         // Truncate to avoid overflowing context
@@ -272,3 +315,4 @@ export class ToolRunner extends RuntimeAgent {
 // ─── Re-export RuntimeAgent for backward compatibility ───────────────────────
 
 export { RuntimeAgent };
+export { isPrivateUrl };

@@ -294,3 +294,54 @@ describe('getModelLoader()', () => {
     expect(a).toBe(b);
   });
 });
+
+// ─── downloadAndCache() HTTPS validation ─────────────────────────────────────
+
+describe('downloadAndCache() HTTPS validation', () => {
+  let loader;
+
+  beforeEach(async () => {
+    loader = new BrowserModelLoader();
+    vi.stubGlobal('navigator', { storage: null });
+    vi.stubGlobal('caches', undefined);
+    await loader.init();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('rejects HTTP download URLs', async () => {
+    await expect(
+      loader.downloadAndCache('test-model', 'http://example.com/model.bin')
+    ).rejects.toThrow(/HTTPS/);
+  });
+
+  it('rejects malformed download URLs', async () => {
+    await expect(
+      loader.downloadAndCache('test-model', 'not-a-url')
+    ).rejects.toThrow();
+  });
+
+  it('accepts HTTPS download URLs (fetch will fail in test env)', async () => {
+    // The URL validation passes; the actual fetch will fail in Node (expected)
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('Network unavailable in test')));
+    await expect(
+      loader.downloadAndCache('test-model', 'https://example.com/model.bin')
+    ).rejects.toThrow('Network unavailable in test');
+    vi.unstubAllGlobals();
+  });
+});
+
+// ─── getModelLoader() concurrent calls (race condition fix) ──────────────────
+
+describe('getModelLoader() concurrent calls', () => {
+  it('concurrent calls return the same instance', async () => {
+    vi.stubGlobal('navigator', { storage: null });
+    vi.stubGlobal('caches', undefined);
+    const [a, b, c] = await Promise.all([getModelLoader(), getModelLoader(), getModelLoader()]);
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+    vi.unstubAllGlobals();
+  });
+});

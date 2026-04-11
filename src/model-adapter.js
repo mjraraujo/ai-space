@@ -105,6 +105,8 @@ export class ModelAdapter {
 // ─── WebLLM Adapter (WebGPU on-device inference) ────────────────────────────
 
 /** maxTotalSequenceLength for the extended (4K) KV context mode */
+const CLOUD_REQUEST_TIMEOUT_MS = 60_000;
+
 const EXTENDED_CONTEXT_LENGTH = 4096;
 /** maxTotalSequenceLength for the ultra (8K) KV context mode */
 const ULTRA_CONTEXT_LENGTH = 8192;
@@ -588,6 +590,7 @@ export class CloudAdapter extends ModelAdapter {
     this._model = config.model || 'gpt-3.5-turbo';
     this._provider = config.provider || this._detectProvider(this._endpoint);
     this._abortController = null;
+    this._timeoutId = null;
   }
 
   getCapabilities() {
@@ -639,6 +642,8 @@ export class CloudAdapter extends ModelAdapter {
     }
 
     this._abortController = new AbortController();
+    // Auto-timeout after 60s to prevent infinite waits on network issues
+    this._timeoutId = setTimeout(() => this._abortController?.abort(), CLOUD_REQUEST_TIMEOUT_MS);
 
     try {
       if (this._provider === 'anthropic') {
@@ -646,11 +651,15 @@ export class CloudAdapter extends ModelAdapter {
       }
       return await this._chatOpenAI(messages, onToken, options);
     } finally {
+      clearTimeout(this._timeoutId);
+      this._timeoutId = null;
       this._abortController = null;
     }
   }
 
   abort() {
+    clearTimeout(this._timeoutId);
+    this._timeoutId = null;
     if (this._abortController) this._abortController.abort();
   }
 
