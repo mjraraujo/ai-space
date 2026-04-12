@@ -405,7 +405,7 @@ export class ContextHarness {
       }
     }
 
-    frame.status = frame.metadata.skillHandled ? 'ready' : 'ready';
+    frame.status = 'ready';
     return frame;
   }
 
