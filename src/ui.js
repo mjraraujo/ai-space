@@ -24,7 +24,7 @@ export class UI {
       trustModel: document.getElementById('trust-model'),
       trustCloudCalls: document.getElementById('trust-cloud-calls'),
       trustConversations: document.getElementById('trust-conversations'),
-      voiceBtn: document.getElementById('voice-btn'),
+      voiceBtn: document.getElementById('mic-btn'),
       cameraBtn: document.getElementById('camera-btn'),
       imagePreview: document.getElementById('image-preview'),
       previewImg: document.getElementById('preview-img'),
@@ -32,14 +32,14 @@ export class UI {
       sidebar: document.getElementById('chat-sidebar'),
       sidebarOverlay: document.getElementById('sidebar-overlay'),
       sidebarList: document.getElementById('sidebar-list'),
-      historyBtn: document.getElementById('history-btn'),
+      historyBtn: document.getElementById('menu-btn'),
       newChatBtn: document.getElementById('new-chat-btn'),
       cloudConfig: document.getElementById('cloud-config'),
       cloudEndpoint: document.getElementById('cloud-endpoint'),
       cloudApiKey: document.getElementById('cloud-api-key'),
       cloudModel: document.getElementById('cloud-model'),
       ttsToggle: document.getElementById('tts-toggle'),
-      modelPicker: document.getElementById('model-picker')
+      modelPicker: document.getElementById('local-model-picker')
     };
 
     this.currentStreamEl = null;
