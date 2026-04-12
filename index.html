@@ -716,6 +716,123 @@
       display: none;
     }
 
+    /* Avatar Scene */
+    .avatar-scene-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 0 0;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .avatar-canvas {
+      width: 160px;
+      height: 160px;
+      border-radius: 50%;
+      background: transparent;
+    }
+
+    .avatar-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--fg);
+      margin-top: 6px;
+      text-align: center;
+    }
+
+    .avatar-status {
+      font-size: 11px;
+      color: var(--fg-dim);
+      text-align: center;
+      margin-top: 2px;
+      text-transform: capitalize;
+    }
+
+    .avatar-scene-container.hidden {
+      display: none;
+    }
+
+    /* Theme Palette Picker */
+    .theme-palette-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .theme-palette-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 10px 6px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      cursor: pointer;
+      transition: border-color 0.2s, transform 0.15s;
+      color: var(--fg);
+      font-size: 11px;
+    }
+
+    .theme-palette-btn:hover {
+      border-color: var(--border-bright);
+      transform: scale(1.03);
+    }
+
+    .theme-palette-btn.selected {
+      border-color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    .theme-palette-swatch {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.1);
+    }
+
+    /* Avatar Preset Grid */
+    .avatar-preset-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .avatar-preset-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 10px 6px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      cursor: pointer;
+      transition: border-color 0.2s, transform 0.15s;
+      color: var(--fg);
+      font-size: 11px;
+    }
+
+    .avatar-preset-btn:hover {
+      border-color: var(--border-bright);
+      transform: scale(1.03);
+    }
+
+    .avatar-preset-btn.selected {
+      border-color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    .avatar-preset-swatch {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+    }
+
     .message {
       max-width: 85%;
       opacity: 0;
@@ -2613,6 +2730,25 @@
       <button class="onboarding-skip" id="onboarding-skip-voice">Use default</button>
     </div>
 
+    <!-- Step 5.5: Avatar Builder (new) — inserted before model step -->
+    <div class="onboarding-step" id="onboarding-step-avatar" data-step="avatar" style="display:none;">
+      <h2 class="onboarding-step-title">Meet your AI</h2>
+      <p class="onboarding-step-subtitle" style="margin-bottom:12px;">Choose a personality for your assistant</p>
+      <div class="avatar-preset-grid" id="onboarding-avatar-grid" style="max-width:340px;">
+        <!-- Populated by JS -->
+      </div>
+      <div style="margin-top:16px;width:100%;max-width:340px;">
+        <input class="onboarding-input" id="onboarding-avatar-name" type="text" placeholder="Name your AI (e.g. Nova)" autocomplete="off" maxlength="20">
+      </div>
+      <div style="margin-top:12px;width:100%;max-width:340px;">
+        <label class="settings-input-label" style="font-size:12px;color:var(--fg-dim);">Theme</label>
+        <div class="theme-palette-grid" id="onboarding-theme-grid" style="margin-top:4px;">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+      <button class="onboarding-skip" id="onboarding-skip-avatar" style="margin-top:10px;">Use default</button>
+    </div>
+
     <!-- Step 6: Ready -->
     <div class="onboarding-step" id="onboarding-step-6" data-step="6">
       <h2 class="onboarding-step-title" id="onboarding-ready-title">Choose your AI model</h2>
@@ -2679,6 +2815,12 @@
       <span class="token-hud-label" id="token-hud-label">0 / 0 tokens · 0 tok/s</span>
     </div>
     <div class="chat-status-bar" id="chat-status-bar">Checking connection...</div>
+    <!-- Avatar Scene Canvas -->
+    <div class="avatar-scene-container" id="avatar-scene-container">
+      <canvas id="avatar-canvas" class="avatar-canvas"></canvas>
+      <div class="avatar-name" id="avatar-name"></div>
+      <div class="avatar-status" id="avatar-status"></div>
+    </div>
     <div class="chat-empty" id="chat-empty">Your space is ready. Try a question below, or speak with the mic.</div>
     <div class="chat-suggestions" id="chat-suggestions">
       <button class="chat-suggestion-chip" data-prompt="What can you help me with?">What can you help me with?</button>
@@ -2724,6 +2866,54 @@
       <span class="settings-title">Settings</span>
     </div>
     <div class="settings-content">
+      <!-- Theme Palette -->
+      <div class="settings-section">
+        <div class="settings-section-title">Theme</div>
+        <div class="settings-card" style="padding:16px;">
+          <p style="font-size:13px;color:var(--fg-muted);line-height:1.55;margin-bottom:10px;">
+            Choose a color palette for your AI Space.
+          </p>
+          <div class="theme-palette-grid" id="theme-palette-grid">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Avatar Customizer -->
+      <div class="settings-section">
+        <div class="settings-section-title">AI Avatar</div>
+        <div class="settings-card" style="padding:16px;">
+          <p style="font-size:13px;color:var(--fg-muted);line-height:1.55;margin-bottom:10px;">
+            Choose your AI assistant's personality and appearance.
+          </p>
+
+          <label class="settings-input-label">Avatar preset</label>
+          <div class="avatar-preset-grid" id="avatar-preset-grid">
+            <!-- Populated by JS -->
+          </div>
+
+          <label class="settings-input-label" style="margin-top:14px;">Avatar name</label>
+          <input class="settings-input" id="avatar-name-input" type="text" placeholder="e.g. Nova, Luna, Echo" maxlength="20" autocomplete="off">
+
+          <label class="settings-input-label" style="margin-top:10px;">Face shape</label>
+          <select class="settings-input" id="avatar-face-shape" style="appearance:auto;-webkit-appearance:auto;">
+            <option value="circle">Circle</option>
+            <option value="rounded">Rounded</option>
+            <option value="square">Square</option>
+            <option value="oval">Oval</option>
+          </select>
+
+          <label class="settings-input-label" style="margin-top:10px;">Voice style</label>
+          <select class="settings-input" id="avatar-voice-style" style="appearance:auto;-webkit-appearance:auto;">
+            <option value="warm">Warm &amp; Friendly</option>
+            <option value="professional">Professional</option>
+            <option value="energetic">Energetic</option>
+            <option value="calm">Calm &amp; Soothing</option>
+            <option value="dramatic">Dramatic</option>
+          </select>
+        </div>
+      </div>
+
       <div class="settings-section">
         <div class="settings-section-title">Mode</div>
         <div class="settings-card" id="mode-selector">

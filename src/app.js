@@ -31,6 +31,10 @@ import {
   createPersonalizationEnricher,
   createTaskTypeEnricher
 } from './context-harness.js';
+import { Avatar, AVATAR_PRESETS, PRESET_NAMES } from './avatar.js';
+import { ThemeEngine, THEME_PALETTES, PALETTE_IDS } from './theme-engine.js';
+import { AvatarVoiceEngine, VOICE_STYLES, VOICE_STYLE_IDS } from './avatar-voice.js';
+import { SceneManager } from './scene-manager.js';
 
 // State
 const state = {
@@ -60,6 +64,10 @@ contextHarness.use(createTaskTypeEnricher({ detectTaskType }));
 contextHarness.use(createPersonalizationEnricher({
   getPromptContext: () => engine.promptContext || ''
 }));
+const avatar = new Avatar();
+const themeEngine = new ThemeEngine();
+const avatarVoice = new AvatarVoiceEngine();
+const sceneManager = new SceneManager();
 const voice = new Voice();
 const camera = new Camera();
 let ui = null;
@@ -574,6 +582,12 @@ async function initApp() {
     return;
   }
 
+  // Initialize theme engine — applies saved palette or default
+  themeEngine.init();
+
+  // Load saved avatar configuration
+  avatar.load();
+
   // Wire event listeners FIRST so buttons work immediately
   wireEventListeners();
 
@@ -802,8 +816,8 @@ function onStepEnter(step) {
     case 5: {
       // Voice picker — populate voices
       if (onboardingData.interactionMode !== 'talk') {
-        // Skip voice picker if chat mode
-        goToOnboardingStep(6);
+        // Skip voice picker if chat mode — go to avatar builder
+        goToOnboardingStep('avatar');
         return;
       }
       populateVoicePicker();
@@ -813,7 +827,7 @@ function onStepEnter(step) {
     case 6: {
       // Ready step
       const readyTitle = document.getElementById('onboarding-ready-title');
-      const displayName = onboardingData.name || 'friend';
+      const displayName = avatar.appearance.name || onboardingData.name || 'friend';
       if (readyTitle) {
         readyTitle.textContent = `You're all set, ${displayName}.`;
       }
@@ -821,6 +835,15 @@ function onStepEnter(step) {
       // Check WebGPU and show status
       setupReadyStep();
       break;
+    }
+  }
+
+  // Handle avatar step (string key)
+  if (step === 'avatar') {
+    const avatarStep = document.getElementById('onboarding-step-avatar');
+    if (avatarStep) {
+      avatarStep.style.display = '';
+      avatarStep.classList.add('active');
     }
   }
 }
@@ -871,7 +894,7 @@ function populateVoicePicker() {
         onboardingData.voiceIndex = allVoices.indexOf(v);
         list.querySelectorAll('.onboarding-voice-card').forEach(c => c.classList.remove('selected'));
         card.classList.add('selected');
-        setTimeout(() => goToOnboardingStep(6), 300);
+        setTimeout(() => goToOnboardingStep('avatar'), 300);
       });
 
       list.appendChild(card);
@@ -1245,9 +1268,9 @@ function wireEventListeners() {
     });
   });
 
-  // Step 5: Skip voice
+  // Step 5: Skip voice — go to avatar builder step
   const skipVoiceBtn = document.getElementById('onboarding-skip-voice');
-  if (skipVoiceBtn) skipVoiceBtn.addEventListener('click', () => goToOnboardingStep(6));
+  if (skipVoiceBtn) skipVoiceBtn.addEventListener('click', () => goToOnboardingStep('avatar'));
 
   // Step 6: Enter space
   const enterBtn = document.getElementById('onboarding-enter');
@@ -1299,6 +1322,11 @@ function wireEventListeners() {
   // Step 0: Manual continue for first impression control
   const startNowBtn = document.getElementById('onboarding-start-now');
   if (startNowBtn) startNowBtn.addEventListener('click', () => goToOnboardingStep(1));
+
+  // === Theme & Avatar Settings ===
+  initThemeSettingsUI();
+  initAvatarSettingsUI();
+  initAvatarScene();
 
   // Mic button (push to talk - single message)
   const micBtn = document.getElementById('mic-btn');
@@ -1957,6 +1985,9 @@ async function sendMessage(text) {
   ui.setSendEnabled(false);
   state.isGenerating = true;
 
+  // Avatar: transition to listening while processing user input
+  avatar.setState('listening');
+
   await auditLog('context_read', { messageLength: text.length });
   if (image) {
     await auditLog('image_input', { hasImage: true });
@@ -2069,13 +2100,16 @@ async function sendMessage(text) {
 
   if (canLocal) {
     // Local inference
+    avatar.setState('thinking');
     ui.showTyping(true);
     try {
       ui.showTyping(false);
+      avatar.setState('talking');
       await runInference(modelMessages, { modelId: engineStatus.modelId });
       // Record turn completion
       const lastMsg = state.messages[state.messages.length - 1];
       contextHarness.completeTurn(frame, lastMsg?.content || '');
+      avatar.reactToText(lastMsg?.content || '');
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
@@ -2086,13 +2120,16 @@ async function sendMessage(text) {
     }
   } else if (canCloud) {
     // Cloud inference
+    avatar.setState('thinking');
     ui.showTyping(true);
     await auditLog('cloud_call', { endpoint: engine.cloudEndpoint, model: engine.cloudModel });
     try {
       ui.showTyping(false);
+      avatar.setState('talking');
       await runInference(modelMessages, { modelId: engine.cloudModel, isCloud: true });
       const lastMsg = state.messages[state.messages.length - 1];
       contextHarness.completeTurn(frame, lastMsg?.content || '');
+      avatar.reactToText(lastMsg?.content || '');
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
@@ -2129,6 +2166,7 @@ async function sendMessage(text) {
   }
 
   state.isGenerating = false;
+  avatar.setState('idle');
   const inputEl = document.getElementById('chat-input');
   if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
 }
@@ -3407,6 +3445,191 @@ function initCommandPalette() {
     }
     if (e.key === 'Escape' && _cmdOpen) closeCommandPalette();
   });
+}
+
+// ─── Theme Settings UI ───────────────────────────────────────────────────────
+
+function initThemeSettingsUI() {
+  const grid = document.getElementById('theme-palette-grid');
+  const onboardingGrid = document.getElementById('onboarding-theme-grid');
+  if (!grid && !onboardingGrid) return;
+
+  const palettes = themeEngine.listPalettes();
+  const currentId = themeEngine.currentPalette;
+
+  function renderGrid(container) {
+    if (!container) return;
+    container.innerHTML = '';
+    for (const p of palettes) {
+      const btn = document.createElement('button');
+      btn.className = 'theme-palette-btn' + (p.id === currentId ? ' selected' : '');
+      btn.dataset.palette = p.id;
+      btn.innerHTML = `<div class="theme-palette-swatch" style="background:${p.accent}"></div><span>${p.name}</span>`;
+      btn.addEventListener('click', () => {
+        themeEngine.setPalette(p.id);
+        container.querySelectorAll('.theme-palette-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        // Sync avatar glow color with theme
+        const palette = THEME_PALETTES[p.id];
+        if (palette) {
+          avatar.updateAppearance({ glowColor: palette.avatarGlow });
+          avatar.save();
+        }
+        // Sync the other grid if it exists
+        const otherId = container.id === 'theme-palette-grid' ? 'onboarding-theme-grid' : 'theme-palette-grid';
+        const other = document.getElementById(otherId);
+        if (other) {
+          other.querySelectorAll('.theme-palette-btn').forEach(b => {
+            b.classList.toggle('selected', b.dataset.palette === p.id);
+          });
+        }
+      });
+      container.appendChild(btn);
+    }
+  }
+
+  renderGrid(grid);
+  renderGrid(onboardingGrid);
+}
+
+// ─── Avatar Settings UI ──────────────────────────────────────────────────────
+
+function initAvatarSettingsUI() {
+  const grid = document.getElementById('avatar-preset-grid');
+  const onboardingGrid = document.getElementById('onboarding-avatar-grid');
+  const nameInput = document.getElementById('avatar-name-input');
+  const faceSelect = document.getElementById('avatar-face-shape');
+  const voiceSelect = document.getElementById('avatar-voice-style');
+
+  // Preset grids
+  function renderPresetGrid(container) {
+    if (!container) return;
+    container.innerHTML = '';
+    for (const name of PRESET_NAMES) {
+      const preset = AVATAR_PRESETS[name];
+      const btn = document.createElement('button');
+      btn.className = 'avatar-preset-btn' + (avatar.appearance.name === preset.name ? ' selected' : '');
+      btn.dataset.preset = name;
+      btn.innerHTML = `<div class="avatar-preset-swatch" style="background:${preset.primaryColor};border-radius:${preset.faceShape === 'square' ? '4px' : '50%'}"></div><span>${preset.name}</span>`;
+      btn.addEventListener('click', () => {
+        avatar.applyPreset(name);
+        avatar.save();
+        container.querySelectorAll('.avatar-preset-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        // Sync inputs
+        if (nameInput) nameInput.value = preset.name;
+        if (faceSelect) faceSelect.value = preset.faceShape;
+        // Update avatar name display
+        updateAvatarDisplay();
+        // Sync the other grid
+        const otherId = container.id === 'avatar-preset-grid' ? 'onboarding-avatar-grid' : 'avatar-preset-grid';
+        const other = document.getElementById(otherId);
+        if (other) {
+          other.querySelectorAll('.avatar-preset-btn').forEach(b => {
+            b.classList.toggle('selected', b.dataset.preset === name);
+          });
+        }
+      });
+      container.appendChild(btn);
+    }
+  }
+
+  renderPresetGrid(grid);
+  renderPresetGrid(onboardingGrid);
+
+  // Name input
+  if (nameInput) {
+    nameInput.value = avatar.appearance.name;
+    nameInput.addEventListener('change', () => {
+      const val = nameInput.value.trim();
+      if (val) {
+        avatar.updateAppearance({ name: val });
+        avatar.save();
+        updateAvatarDisplay();
+      }
+    });
+  }
+
+  // Onboarding avatar name
+  const onboardingAvatarName = document.getElementById('onboarding-avatar-name');
+  if (onboardingAvatarName) {
+    onboardingAvatarName.value = avatar.appearance.name;
+    onboardingAvatarName.addEventListener('change', () => {
+      const val = onboardingAvatarName.value.trim();
+      if (val) {
+        avatar.updateAppearance({ name: val });
+        avatar.save();
+        if (nameInput) nameInput.value = val;
+        updateAvatarDisplay();
+      }
+    });
+  }
+
+  // Face shape
+  if (faceSelect) {
+    faceSelect.value = avatar.appearance.faceShape;
+    faceSelect.addEventListener('change', () => {
+      avatar.updateAppearance({ faceShape: faceSelect.value });
+      avatar.save();
+    });
+  }
+
+  // Voice style
+  if (voiceSelect) {
+    voiceSelect.addEventListener('change', () => {
+      avatarVoice.setStyle(voiceSelect.value);
+    });
+  }
+
+  // Skip avatar onboarding step
+  const skipAvatarBtn = document.getElementById('onboarding-skip-avatar');
+  if (skipAvatarBtn) {
+    skipAvatarBtn.addEventListener('click', () => goToOnboardingStep(6));
+  }
+}
+
+function updateAvatarDisplay() {
+  const nameEl = document.getElementById('avatar-name');
+  const statusEl = document.getElementById('avatar-status');
+  if (nameEl) nameEl.textContent = avatar.appearance.name;
+  if (statusEl) statusEl.textContent = avatar.state;
+}
+
+// ─── Avatar Scene ────────────────────────────────────────────────────────────
+
+function initAvatarScene() {
+  const canvas = document.getElementById('avatar-canvas');
+  if (!canvas) return;
+
+  sceneManager.attach(canvas);
+  sceneManager.avatar = avatar;
+  sceneManager.start();
+  updateAvatarDisplay();
+
+  // Update avatar display when state changes
+  const origSetState = avatar.setState.bind(avatar);
+  avatar.setState = function(newState) {
+    origSetState(newState);
+    updateAvatarDisplay();
+  };
+
+  // Show/hide avatar based on whether there are messages
+  const container = document.getElementById('avatar-scene-container');
+  if (container) {
+    // Show by default, hide when messages exist
+    const observer = new MutationObserver(() => {
+      const msgs = document.getElementById('messages');
+      if (msgs && msgs.children.length > 0) {
+        container.classList.add('hidden');
+      } else {
+        container.classList.remove('hidden');
+      }
+    });
+    const msgs = document.getElementById('messages');
+    if (msgs) {
+      observer.observe(msgs, { childList: true });
+    }
+  }
 }
 
 export { initApp };
