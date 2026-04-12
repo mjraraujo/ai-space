@@ -26,6 +26,11 @@ import {
   looksLikeLegacyRuntimeScript,
   parseModelSizeToBytes
 } from './utils.js';
+import {
+  ContextHarness,
+  createPersonalizationEnricher,
+  createTaskTypeEnricher
+} from './context-harness.js';
 
 // State
 const state = {
@@ -50,6 +55,11 @@ const toolRunner = new ToolRunner();
 toolRunner.registerBuiltIns();
 const skillRegistry = createDefaultRegistry();
 const skillStudio = new SkillStudio();
+const contextHarness = new ContextHarness();
+contextHarness.use(createTaskTypeEnricher({ detectTaskType }));
+contextHarness.use(createPersonalizationEnricher({
+  getPromptContext: () => engine.promptContext || ''
+}));
 const voice = new Voice();
 const camera = new Camera();
 let ui = null;
@@ -1955,6 +1965,38 @@ async function sendMessage(text) {
   const engineStatus = engine.getStatus();
   const canLocal = engineStatus.status === 'ready' && state.mode !== 'cloud';
   const canCloud = (state.mode === 'cloud' || state.mode === 'hybrid') && engine.cloudConfigured;
+
+  // ─── Context Harness: begin turn ──────────────────────────────────────
+  const maxCtx = engine.getAdapter()?.getCapabilities?.()?.maxContextTokens || 4096;
+  const frame = contextHarness.beginTurn({
+    text,
+    image: image || null,
+    conversationId: state.conversationId,
+    messages: [...state.messages],
+    mode: state.mode,
+    maxContextTokens: maxCtx,
+    systemPrompt: '' // engine handles system prompt internally
+  });
+
+  // Run harness enrichment (task type + personalization)
+  await contextHarness.enrich(frame, {
+    memory: memoryReady ? memory : null,
+    audit,
+    engine,
+    skillRegistry,
+    toolRunner
+  });
+
+  // Record task type metadata in audit
+  if (frame.metadata.taskType) {
+    await auditLog('context_enrichment', {
+      taskType: frame.metadata.taskType,
+      personalized: !!frame.metadata.personalized,
+      turnId: frame.id
+    });
+  }
+
+  // ─── Web context (preserved existing behavior) ────────────────────────
   const factualQuery = isFactualQuestion(text);
   const webIntent = isWebLookupIntent(text) || factualQuery;
 
@@ -1974,6 +2016,9 @@ async function sendMessage(text) {
         queryLength: text.length,
         autoTriggered: factualQuery && !state.localInternetAssist
       });
+      // Record web context in frame for observability
+      frame.enrichments['web-context'] = { snippet: liveContext, source: 'wikipedia' };
+      frame.metadata.hasWebContext = true;
     } else if (webIntent) {
       appendRuntimeOutput('Web/factual lookup requested but no live context returned.');
     }
@@ -1996,6 +2041,7 @@ async function sendMessage(text) {
     const msg = 'You are offline and cloud mode is selected. Switch to local mode or wait until connection is restored.';
     ui.renderMessage('assistant', msg);
     state.messages.push({ role: 'assistant', content: msg });
+    contextHarness.errorTurn(frame, 'offline');
     state.isGenerating = false;
     const inputEl = document.getElementById('chat-input');
     if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
@@ -2008,6 +2054,7 @@ async function sendMessage(text) {
     const responseText = localSkill.response || 'Local skill executed.';
     ui.renderMessage('assistant', responseText);
     state.messages.push({ role: 'assistant', content: responseText });
+    contextHarness.completeTurn(frame, responseText);
     if (memoryReady) {
       try {
         await memory.saveChatHistory(state.conversationId, state.messages);
@@ -2026,12 +2073,16 @@ async function sendMessage(text) {
     try {
       ui.showTyping(false);
       await runInference(modelMessages, { modelId: engineStatus.modelId });
+      // Record turn completion
+      const lastMsg = state.messages[state.messages.length - 1];
+      contextHarness.completeTurn(frame, lastMsg?.content || '');
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
       const errorMsg = 'Sorry, something went wrong: ' + err.message;
       ui.renderMessage('assistant', errorMsg);
       state.messages.push({ role: 'assistant', content: errorMsg });
+      contextHarness.errorTurn(frame, err.message);
     }
   } else if (canCloud) {
     // Cloud inference
@@ -2040,12 +2091,15 @@ async function sendMessage(text) {
     try {
       ui.showTyping(false);
       await runInference(modelMessages, { modelId: engine.cloudModel, isCloud: true });
+      const lastMsg = state.messages[state.messages.length - 1];
+      contextHarness.completeTurn(frame, lastMsg?.content || '');
     } catch (err) {
       ui.showTyping(false);
       ui.finalizeStreamingMessage();
       const errorMsg = 'Cloud error: ' + err.message;
       ui.renderMessage('assistant', errorMsg);
       state.messages.push({ role: 'assistant', content: errorMsg });
+      contextHarness.errorTurn(frame, err.message);
     }
   } else {
     // No engine available
@@ -2062,6 +2116,7 @@ async function sendMessage(text) {
 
     ui.renderMessage('assistant', msg);
     state.messages.push({ role: 'assistant', content: msg });
+    contextHarness.errorTurn(frame, 'no-engine');
   }
 
   // Save conversation persistently
