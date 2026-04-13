@@ -992,6 +992,7 @@ async function runOnboardingDownload(attempt = 1) {
     const loadedModelId = engine.getStatus().modelId;
     await auditLog('model_load', { model: loadedModelId, success: true });
     savePref('selected_model', loadedModelId);
+    localStorage.setItem('ai-space-selected-model', loadedModelId);
     ui.updateProgress(100, 'Model ready!');
 
     if (downloadEl) downloadEl.style.display = 'none';
@@ -1139,7 +1140,10 @@ async function tryInitEngine() {
       savePref('mode', 'cloud');
       return;
     }
-    await engine.init(null, () => {});
+    // Prefer the model the user previously downloaded (stored synchronously in
+    // localStorage so it is available before IndexedDB/memory is ready).
+    const savedModel = localStorage.getItem('ai-space-selected-model');
+    await engine.init(savedModel, () => {});
     await auditLog('model_load', { model: engine.getStatus().modelId, success: true });
   } catch (err) {
     console.warn('Engine init failed in background:', err);
@@ -1346,11 +1350,8 @@ function wireEventListeners() {
   // New chat button
   const newChatBtn = document.getElementById('new-chat-btn');
   if (newChatBtn) newChatBtn.addEventListener('click', () => {
-    state.messages = [];
-    state.conversationId = 'conv_' + Date.now();
-    ui.clearMessages();
+    handleNewConversation();
     toggleSidebar(false);
-    savePref('last_conversation_id', state.conversationId);
   });
 
   // Camera button
@@ -1876,6 +1877,16 @@ function renderChatStatusBar() {
 }
 
 /**
+ * Start a new conversation — clears current chat and resets conversation state.
+ */
+function handleNewConversation() {
+  state.messages = [];
+  state.conversationId = 'conv_' + Date.now();
+  ui.clearMessages();
+  savePref('last_conversation_id', state.conversationId);
+}
+
+/**
  * Handle send
  */
 function handleSend() {
@@ -2093,6 +2104,7 @@ async function sendMessage(text) {
       } catch {}
     }
     state.isGenerating = false;
+    avatar.setState('idle');
     const inputEl = document.getElementById('chat-input');
     if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
     return;
@@ -2474,6 +2486,7 @@ async function handleSwitchModel() {
     if (hint) hint.textContent = '✓ Model ready — running entirely on your device';
     if (btn) btn.textContent = 'Download & Switch';
     savePref('selected_model', modelId);
+    localStorage.setItem('ai-space-selected-model', modelId);
     ui.showNotification('Switched to ' + (engine.getStatus().modelInfo?.name || modelId));
     updateSettingsView();
   } catch (err) {
@@ -2791,6 +2804,14 @@ async function handleClearData() {
   if (!confirm('Delete all conversations and settings?')) return;
   try {
     if (memoryReady) await memory.clearAll();
+    // Clear all localStorage keys used by the app
+    [
+      'ai-space-visited',
+      'ai-space-kv-strategy',
+      'ai-space-kv-ctx',
+      'ai-space-kv-script',
+      'ai-space-selected-model'
+    ].forEach(k => localStorage.removeItem(k));
     state.messages = [];
     state.conversationId = null;
     ui.clearMessages();
@@ -2900,6 +2921,8 @@ async function handleConversation() {
         }
 
         if (!finalText) {
+          // Resume so conversation mode keeps listening after noise/empty silence.
+          if (voice.conversationMode) voice.resumeListening().catch(() => {});
           return;
         }
 
