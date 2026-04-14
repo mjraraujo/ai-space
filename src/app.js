@@ -8,6 +8,8 @@ import { Audit } from './audit.js';
 import { Shortcuts } from './shortcuts.js';
 import { UI } from './ui.js';
 import { Voice } from './voice.js';
+import { PersonaPlexVoice, PERSONAPLEX_VOICES } from './personaplex-voice.js';
+import { BrowserVoiceAI } from './browser-voice-ai.js';
 import { Camera } from './camera.js';
 import { deviceAuthFlow, getAuthIssuer, getClientIdOverride, setClientIdOverride, clearClientIdOverride } from './codex-auth.js';
 import { RelayHub } from './relays.js';
@@ -35,6 +37,7 @@ import { Avatar, AVATAR_PRESETS, PRESET_NAMES } from './avatar.js';
 import { ThemeEngine, THEME_PALETTES, PALETTE_IDS } from './theme-engine.js';
 import { AvatarVoiceEngine, VOICE_STYLES, VOICE_STYLE_IDS } from './avatar-voice.js';
 import { SceneManager } from './scene-manager.js';
+import { createOnboardingController } from './onboarding.js';
 
 // State
 const state = {
@@ -69,6 +72,10 @@ const themeEngine = new ThemeEngine();
 const avatarVoice = new AvatarVoiceEngine();
 const sceneManager = new SceneManager();
 const voice = new Voice();
+const personaplexVoice = new PersonaPlexVoice();
+let personaplexEnabled = false;
+const browserVoiceAI = new BrowserVoiceAI();
+let browserVoiceAIEnabled = false;
 const camera = new Camera();
 let ui = null;
 let memoryReady = false;
@@ -582,6 +589,23 @@ async function initApp() {
     return;
   }
 
+  // Create the onboarding controller — must happen before wireEventListeners
+  // so the delegate functions (goToOnboardingStep etc.) resolve correctly.
+  onboarding = createOnboardingController({
+    engine,
+    memory,
+    voice,
+    avatar,
+    ui,
+    state,
+    isMemoryReady: () => memoryReady,
+    savePref,
+    transition,
+    tryInitEngine,
+    markVisited,
+    auditLog,
+  });
+
   // Initialize theme engine — applies saved palette or default
   themeEngine.init();
 
@@ -605,6 +629,23 @@ async function initApp() {
 
   // Check for incoming shortcut data
   handleIncomingShortcut();
+
+  // Handle shared content from the Web Share Target API (redirected from SW).
+  // The SW stores the shared payload in IndexedDB and redirects with ?shared=true.
+  handleShareTarget(new URLSearchParams(window.location.search)).then((content) => {
+    if (content) {
+      // Pre-populate the chat input so the user can review before sending.
+      const input = document.getElementById('chat-input');
+      if (input) {
+        input.value = content;
+        input.dispatchEvent(new Event('input'));
+      }
+      // Clean the ?shared=true param from the URL bar.
+      if (window.history.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  });
 
   // Check if this is a returning user (localStorage is synchronous)
   const hasVisited = localStorage.getItem('ai-space-visited');
@@ -683,446 +724,41 @@ function initMemoryInBackground() {
 }
 
 /**
- * Onboarding wizard state
+ * Onboarding wizard — created lazily in initApp() once all deps are ready.
+ * @type {ReturnType<import('./onboarding.js').createOnboardingController>|null}
  */
-let onboardingStep = 0;
-let onboardingData = {
-  interactionMode: 'chat',
-  name: '',
-  timezone: '',
-  dateStr: '',
-  tone: 'balanced',
-  voiceIndex: -1
-};
-let onboardingAutoAdvanceTimer = null;
+let onboarding = null;
 
 /**
  * Build personalized system prompt suffix from user preferences
  */
+// ─── Onboarding wizard delegates ─────────────────────────────────────────────
+// All onboarding state and logic live in src/onboarding.js.
+// These thin wrappers keep existing call-sites in wireEventListeners() working
+// without needing to rename every reference.
+
 function buildPersonalizedPrompt() {
-  const parts = [];
-  if (onboardingData.name) {
-    parts.push(`The user's name is ${onboardingData.name}.`);
-  }
-  if (onboardingData.tone && onboardingData.tone !== 'balanced') {
-    const toneDesc = {
-      casual: 'casual and relaxed',
-      professional: 'professional and precise',
-      playful: 'playful and creative'
-    };
-    parts.push(`They prefer a ${toneDesc[onboardingData.tone] || onboardingData.tone} communication style.`);
-  }
-  if (onboardingData.timezone) {
-    parts.push(`Their timezone is ${onboardingData.timezone}.`);
-  }
-  if (onboardingData.dateStr) {
-    parts.push(`Today is ${onboardingData.dateStr}.`);
-  }
-  if (onboardingData.interactionMode === 'talk') {
-    parts.push('The user prefers voice interaction.');
-  }
-  return parts.length > 0 ? '\n\n' + parts.join(' ') : '';
+  return onboarding.buildPersonalizedPrompt();
 }
 
-/**
- * Transition to a specific onboarding step
- */
 function goToOnboardingStep(step) {
-  // Clear any pending auto-advance
-  if (onboardingAutoAdvanceTimer) {
-    clearTimeout(onboardingAutoAdvanceTimer);
-    onboardingAutoAdvanceTimer = null;
-  }
-
-  // Hide all steps, show target
-  document.querySelectorAll('.onboarding-step').forEach(el => {
-    el.classList.remove('active');
-  });
-
-  onboardingStep = step;
-
-  const next = document.getElementById(`onboarding-step-${step}`);
-  if (next) {
-    next.classList.add('active');
-  }
-
-  // Voice guidance for talk mode
-  if (onboardingData.interactionMode === 'talk' && step > 1) {
-    const title = next?.querySelector('.onboarding-step-title');
-    if (title && voice.ttsEnabled) {
-      try { voice.speak(title.textContent); } catch {}
-    }
-  }
-
-  // Step-specific logic
-  onStepEnter(step);
+  onboarding.goToStep(step);
 }
 
-/**
- * Step-specific initialization when entering a step
- */
-function onStepEnter(step) {
-  switch (step) {
-    case 0:
-      // Softer intro timing with manual continue option.
-      onboardingAutoAdvanceTimer = setTimeout(() => goToOnboardingStep(1), 6000);
-      break;
-
-    case 2: {
-      // Focus name input
-      const nameInput = document.getElementById('onboarding-name');
-      if (nameInput) {
-        setTimeout(() => nameInput.focus(), 400);
-      }
-      // If talk mode, try to listen for name
-      if (onboardingData.interactionMode === 'talk' && voice.hasSpeechRecognition) {
-        try {
-          voice.onSilenceDetected = (text) => {
-            if (text && text.trim()) {
-              onboardingData.name = text.trim();
-              if (nameInput) nameInput.value = onboardingData.name;
-              voice.onSilenceDetected = null;
-              goToOnboardingStep(3);
-            }
-          };
-          voice.onInterimResult = (text) => {
-            if (nameInput) nameInput.value = text;
-          };
-          voice.startRecording();
-        } catch {}
-      }
-      break;
-    }
-
-    case 3: {
-      // Auto-detect timezone and date
-      try {
-        onboardingData.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      } catch {
-        onboardingData.timezone = 'Unknown';
-      }
-      const now = new Date();
-      onboardingData.dateStr = now.toLocaleDateString(undefined, {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-      });
-      const infoEl = document.getElementById('onboarding-location-info');
-      if (infoEl) {
-        infoEl.textContent = `It looks like you're in ${onboardingData.timezone} and today is ${onboardingData.dateStr}.`;
-      }
-      // Wait for explicit confirmation to avoid a rushed onboarding flow.
-      break;
-    }
-
-    case 5: {
-      // Voice picker — populate voices
-      if (onboardingData.interactionMode !== 'talk') {
-        // Skip voice picker if chat mode — go to avatar builder
-        goToOnboardingStep('avatar');
-        return;
-      }
-      populateVoicePicker();
-      break;
-    }
-
-    case 6: {
-      // Ready step
-      const readyTitle = document.getElementById('onboarding-ready-title');
-      const displayName = avatar.appearance.name || onboardingData.name || 'friend';
-      if (readyTitle) {
-        readyTitle.textContent = `You're all set, ${displayName}.`;
-      }
-
-      // Check WebGPU and show status
-      setupReadyStep();
-      break;
-    }
-  }
-
-  // Handle avatar step (string key)
-  if (step === 'avatar') {
-    const avatarStep = document.getElementById('onboarding-step-avatar');
-    if (avatarStep) {
-      avatarStep.style.display = '';
-      avatarStep.classList.add('active');
-    }
-  }
-}
-
-/**
- * Populate voice picker with available SpeechSynthesis voices
- */
-function populateVoicePicker() {
-  const list = document.getElementById('onboarding-voice-list');
-  if (!list) return;
-
-  const getVoices = () => {
-    const allVoices = speechSynthesis.getVoices();
-    // Filter to user's language
-    const userLang = navigator.language?.split('-')[0] || 'en';
-    let filtered = allVoices.filter(v => v.lang.startsWith(userLang));
-    if (filtered.length === 0) filtered = allVoices.filter(v => v.lang.startsWith('en'));
-    if (filtered.length === 0) filtered = allVoices;
-
-    // Show up to 5
-    const shown = filtered.slice(0, 5);
-    list.innerHTML = '';
-
-    shown.forEach((v, i) => {
-      const card = document.createElement('div');
-      card.className = 'onboarding-voice-card';
-      card.dataset.voiceIndex = String(allVoices.indexOf(v));
-
-      const name = document.createElement('span');
-      name.className = 'onboarding-voice-name';
-      name.textContent = v.name.replace(/Microsoft |Google |Apple /, '');
-
-      const preview = document.createElement('button');
-      preview.className = 'onboarding-voice-preview';
-      preview.textContent = '▶ Preview';
-      preview.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const utt = new SpeechSynthesisUtterance('Hello! I can be your voice.');
-        utt.voice = v;
-        speechSynthesis.cancel();
-        speechSynthesis.speak(utt);
-      });
-
-      card.appendChild(name);
-      card.appendChild(preview);
-
-      card.addEventListener('click', () => {
-        onboardingData.voiceIndex = allVoices.indexOf(v);
-        list.querySelectorAll('.onboarding-voice-card').forEach(c => c.classList.remove('selected'));
-        card.classList.add('selected');
-        setTimeout(() => goToOnboardingStep('avatar'), 300);
-      });
-
-      list.appendChild(card);
-    });
-
-    if (shown.length === 0) {
-      list.innerHTML = '<p class="onboarding-info">No voices available</p>';
-    }
-  };
-
-  // Voices may load async
-  if (speechSynthesis.getVoices().length > 0) {
-    getVoices();
-  } else {
-    speechSynthesis.addEventListener('voiceschanged', getVoices, { once: true });
-    // Fallback if voices never fire
-    setTimeout(getVoices, 500);
-  }
-}
-
-/**
- * Setup the ready step — check WebGPU, show model picker or cloud fallback
- */
-async function setupReadyStep() {
-  const badge = document.getElementById('onboarding-mode-badge');
-  const info = document.getElementById('onboarding-ready-info');
-  const modelSection = document.getElementById('onboarding-model-section');
-  const startDownloadBtn = document.getElementById('onboarding-start-download');
-  const enterBtn = document.getElementById('onboarding-enter');
-  const downloadEl = document.getElementById('onboarding-download-progress');
-  const errorEl = document.getElementById('onboarding-download-error');
-
-  let hasWebGPU = false;
-  try {
-    hasWebGPU = await engine.checkWebGPU();
-  } catch {
-    hasWebGPU = false;
-  }
-
-  if (hasWebGPU) {
-    if (badge) badge.textContent = '⚡ WebGPU available — runs on your device';
-    if (info) info.textContent = 'Pick a model to download. Smaller = faster. If a larger model is rate-limited, switch to Qwen or SmolLM for a faster first start.';
-    if (modelSection) modelSection.style.display = 'block';
-    if (startDownloadBtn) {
-      startDownloadBtn.style.display = 'block';
-      startDownloadBtn.textContent = 'Download & Start';
-    }
-    if (errorEl) errorEl.style.display = 'none';
-    if (enterBtn) enterBtn.style.display = 'none';
-  } else {
-    state.mode = 'cloud';
-    engine.mode = 'cloud';
-    savePref('mode', 'cloud');
-    if (badge) badge.textContent = '☁️ Cloud mode — WebGPU not available';
-    if (info) info.textContent = 'This browser/device does not support WebGPU. You can still use cloud AI — configure an API key in Settings.';
-    if (modelSection) modelSection.style.display = 'none';
-    if (startDownloadBtn) startDownloadBtn.style.display = 'none';
-    if (enterBtn) enterBtn.style.display = 'block';
-  }
-}
-
-/**
- * Run the onboarding model download with retry support
- */
-async function runOnboardingDownload(attempt = 1) {
-  const badge = document.getElementById('onboarding-mode-badge');
-  const downloadEl = document.getElementById('onboarding-download-progress');
-  const errorEl = document.getElementById('onboarding-download-error');
-  const errorMsg = document.getElementById('onboarding-download-error-msg');
-  const startDownloadBtn = document.getElementById('onboarding-start-download');
-  const retryBtn = document.getElementById('onboarding-retry-download');
-  const enterBtn = document.getElementById('onboarding-enter');
-  const modelSection = document.getElementById('onboarding-model-section');
-  const modelPicker = document.getElementById('onboarding-model-picker');
-  const models = AIEngine.getModels();
-
-  const selectedModel = modelPicker?.value || null;
-
-  if (startDownloadBtn) {
-    startDownloadBtn.style.display = 'none';
-    startDownloadBtn.textContent = 'Download & Start';
-  }
-  if (retryBtn) retryBtn.textContent = 'Retry Download';
-  if (errorEl) errorEl.style.display = 'none';
-  if (modelSection) modelSection.style.display = 'none';
-  if (downloadEl) downloadEl.style.display = 'flex';
-  if (badge) badge.textContent = attempt > 1 ? `⚡ Downloading (attempt ${attempt})…` : '⚡ Downloading…';
-
-  try {
-    await engine.init(selectedModel, (progress) => {
-      const pct = Math.round((progress.progress || 0) * 100);
-      ui.updateProgress(pct, progress.text || `Downloading… ${pct}%`);
-    }, { kvMode: state.kvMode });
-
-    const loadedModelId = engine.getStatus().modelId;
-    await auditLog('model_load', { model: loadedModelId, success: true });
-    savePref('selected_model', loadedModelId);
-    ui.updateProgress(100, 'Model ready!');
-
-    if (downloadEl) downloadEl.style.display = 'none';
-    if (badge) badge.textContent = '⚡ Running locally on your device';
-    if (enterBtn) enterBtn.style.display = 'block';
-  } catch (err) {
-    console.error('Model download failed:', err);
-    if (downloadEl) downloadEl.style.display = 'none';
-    if (badge) badge.textContent = '⚠️ Download failed';
-
-    const msg = err.message || '';
-    const lower = msg.toLowerCase();
-    const isRateLimit = lower.includes('quota') || lower.includes('rate') || lower.includes('429') || lower.includes('limit') || lower.includes('exceeded');
-    const isStorage = lower.includes('storage') || lower.includes('space') || lower.includes('disk') || lower.includes('quotaexceeded');
-    const failedModelName = models[selectedModel]?.name || 'this model';
-    const fallbackModelId = recommendLocalModelFallback(selectedModel, {
-      isRateLimit,
-      isStorage,
-      deviceMemory: navigator.deviceMemory
-    });
-    const fallbackModelName = fallbackModelId ? (models[fallbackModelId]?.name || 'a smaller model') : '';
-
-    let userMsg;
-    if (isRateLimit) {
-      const waitSec = attempt <= 1 ? 60 : attempt * 90;
-      userMsg = fallbackModelName
-        ? `HuggingFace is rate-limiting ${failedModelName} right now. Wait ${waitSec} seconds and tap "Retry Download", or start now with ${fallbackModelName}.`
-        : `HuggingFace is rate-limiting downloads right now. Wait ${waitSec} seconds and tap "Retry Download". This is temporary.`;
-    } else if (isStorage) {
-      userMsg = fallbackModelName
-        ? `Not enough browser storage for ${failedModelName}. Free up space or switch now to ${fallbackModelName}.`
-        : 'Not enough browser storage. Free up space or choose a smaller model, then retry.';
-    } else {
-      userMsg = fallbackModelName
-        ? `Download failed: ${msg}. Check your connection, retry ${failedModelName}, or try ${fallbackModelName} now.`
-        : `Download failed: ${msg}. Check your connection and retry.`;
-    }
-
-    if (errorMsg) errorMsg.textContent = userMsg;
-    if (errorEl) errorEl.style.display = 'block';
-    if (modelSection) modelSection.style.display = 'block';
-
-    if (retryBtn) {
-      retryBtn.textContent = `Retry ${failedModelName}`;
-    }
-
-    if (fallbackModelId && modelPicker && startDownloadBtn) {
-      modelPicker.value = fallbackModelId;
-      startDownloadBtn.style.display = 'block';
-      startDownloadBtn.textContent = `Try ${fallbackModelName} instead`;
-    } else if (startDownloadBtn) {
-      startDownloadBtn.style.display = 'none';
-    }
-  }
-}
-
-/**
- * Complete onboarding — save preferences and go to chat
- */
 async function completeOnboarding() {
-  // Save all preferences
-  savePref('interaction_mode', onboardingData.interactionMode);
-  savePref('user_name', onboardingData.name);
-  savePref('timezone', onboardingData.timezone);
-  savePref('tone', onboardingData.tone);
-  savePref('voice_index', onboardingData.voiceIndex);
-
-  // Build and save personalized prompt context
-  const promptContext = buildPersonalizedPrompt();
-  savePref('prompt_context', promptContext);
-
-  // Set it on the engine
-  engine.promptContext = promptContext;
-
-  await markVisited();
-  transition('chat');
+  return onboarding.complete();
 }
 
-/**
- * Start onboarding — multi-step wizard for first-time users
- */
 async function startOnboarding() {
-  // Check if returning user
-  // (state.firstVisit is set by memory in background, but may not be ready yet)
-  // We start the wizard regardless — initMemoryInBackground will set firstVisit
-
-  // Load any saved preferences for returning users (async, non-blocking)
-  loadSavedOnboardingPrefs();
-
-  // Start at step 0
-  goToOnboardingStep(0);
+  return onboarding.start();
 }
 
-/**
- * Load saved onboarding preferences for returning users or prompt context
- */
 async function loadSavedOnboardingPrefs() {
-  // Wait a bit for memory to be ready
-  const waitForMemory = () => new Promise(resolve => {
-    if (memoryReady) return resolve(true);
-    let attempts = 0;
-    const check = setInterval(() => {
-      attempts++;
-      if (memoryReady || attempts > 20) {
-        clearInterval(check);
-        resolve(memoryReady);
-      }
-    }, 100);
-  });
+  return onboarding.loadSavedPrefs();
+}
 
-  await waitForMemory();
-  if (!memoryReady) return;
-
-  try {
-    const promptContext = await memory.getPreference('prompt_context');
-    if (promptContext) {
-      engine.promptContext = promptContext;
-    }
-
-    // Also load individual prefs for the data object
-    const name = await memory.getPreference('user_name');
-    if (name) onboardingData.name = name;
-    const tone = await memory.getPreference('tone');
-    if (tone) onboardingData.tone = tone;
-    const tz = await memory.getPreference('timezone');
-    if (tz) onboardingData.timezone = tz;
-    const mode = await memory.getPreference('interaction_mode');
-    if (mode) onboardingData.interactionMode = mode;
-    const vi = await memory.getPreference('voice_index');
-    if (vi !== null && vi !== undefined) onboardingData.voiceIndex = vi;
-  } catch {}
+async function runOnboardingDownload(attempt = 1) {
+  return onboarding.runDownload(attempt);
 }
 
 /**
@@ -1139,7 +775,10 @@ async function tryInitEngine() {
       savePref('mode', 'cloud');
       return;
     }
-    await engine.init(null, () => {});
+    // Prefer the model the user previously downloaded (stored synchronously in
+    // localStorage so it is available before IndexedDB/memory is ready).
+    const savedModel = localStorage.getItem('ai-space-selected-model');
+    await engine.init(savedModel, () => {});
     await auditLog('model_load', { model: engine.getStatus().modelId, success: true });
   } catch (err) {
     console.warn('Engine init failed in background:', err);
@@ -1228,7 +867,7 @@ function wireEventListeners() {
   // Step 1: Interaction mode cards
   document.querySelectorAll('#onboarding-step-1 .onboarding-card').forEach(card => {
     card.addEventListener('click', () => {
-      onboardingData.interactionMode = card.dataset.mode;
+      onboarding.getData().interactionMode = card.dataset.mode;
       document.querySelectorAll('#onboarding-step-1 .onboarding-card').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
       setTimeout(() => goToOnboardingStep(2), 250);
@@ -1241,14 +880,14 @@ function wireEventListeners() {
     nameInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        onboardingData.name = nameInput.value.trim();
+        onboarding.getData().name = nameInput.value.trim();
         goToOnboardingStep(3);
       }
     });
   }
   const skipNameBtn = document.getElementById('onboarding-skip-name');
   if (skipNameBtn) skipNameBtn.addEventListener('click', () => {
-    onboardingData.name = nameInput?.value?.trim() || '';
+    onboarding.getData().name = nameInput?.value?.trim() || '';
     goToOnboardingStep(3);
   });
 
@@ -1261,7 +900,7 @@ function wireEventListeners() {
   // Step 4: Tone cards
   document.querySelectorAll('#onboarding-tone-cards .onboarding-card').forEach(card => {
     card.addEventListener('click', () => {
-      onboardingData.tone = card.dataset.tone;
+      onboarding.getData().tone = card.dataset.tone;
       document.querySelectorAll('#onboarding-tone-cards .onboarding-card').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
       setTimeout(() => goToOnboardingStep(5), 250);
@@ -1346,11 +985,8 @@ function wireEventListeners() {
   // New chat button
   const newChatBtn = document.getElementById('new-chat-btn');
   if (newChatBtn) newChatBtn.addEventListener('click', () => {
-    state.messages = [];
-    state.conversationId = 'conv_' + Date.now();
-    ui.clearMessages();
+    handleNewConversation();
     toggleSidebar(false);
-    savePref('last_conversation_id', state.conversationId);
   });
 
   // Camera button
@@ -1415,6 +1051,12 @@ function wireEventListeners() {
       savePref('tts_enabled', ttsToggle.checked);
     });
   }
+
+  // PersonaPlex settings
+  initPersonaPlexSettingsUI();
+
+  // Browser Voice AI settings
+  initBrowserVoiceSettingsUI();
 
   // Local model switch
   const switchModelBtn = document.getElementById('switch-model-btn');
@@ -1876,6 +1518,16 @@ function renderChatStatusBar() {
 }
 
 /**
+ * Start a new conversation — clears current chat and resets conversation state.
+ */
+function handleNewConversation() {
+  state.messages = [];
+  state.conversationId = 'conv_' + Date.now();
+  ui.clearMessages();
+  savePref('last_conversation_id', state.conversationId);
+}
+
+/**
  * Handle send
  */
 function handleSend() {
@@ -2093,6 +1745,7 @@ async function sendMessage(text) {
       } catch {}
     }
     state.isGenerating = false;
+    avatar.setState('idle');
     const inputEl = document.getElementById('chat-input');
     if (inputEl) ui.setSendEnabled(inputEl.value.trim().length > 0);
     return;
@@ -2474,6 +2127,7 @@ async function handleSwitchModel() {
     if (hint) hint.textContent = '✓ Model ready — running entirely on your device';
     if (btn) btn.textContent = 'Download & Switch';
     savePref('selected_model', modelId);
+    localStorage.setItem('ai-space-selected-model', modelId);
     ui.showNotification('Switched to ' + (engine.getStatus().modelInfo?.name || modelId));
     updateSettingsView();
   } catch (err) {
@@ -2551,6 +2205,223 @@ const CLOUD_PROVIDERS = {
     hint: 'Enter your OpenAI-compatible endpoint and model'
   }
 };
+
+/**
+ * Initialise the PersonaPlex settings panel and restore saved preferences.
+ */
+function initPersonaPlexSettingsUI() {
+  // Populate voice model dropdown
+  const voicePicker = document.getElementById('personaplex-voice-picker');
+  if (voicePicker) {
+    voicePicker.innerHTML = '';
+    PERSONAPLEX_VOICES.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = v.label;
+      voicePicker.appendChild(opt);
+    });
+  }
+
+  const toggle = document.getElementById('personaplex-toggle');
+  const settingsDiv = document.getElementById('personaplex-settings');
+  const urlInput = document.getElementById('personaplex-url');
+  const personaInput = document.getElementById('personaplex-persona');
+  const testBtn = document.getElementById('personaplex-test-btn');
+  const statusEl = document.getElementById('personaplex-status');
+
+  // Restore saved preferences
+  (async () => {
+    const savedEnabled = await memory.getPreference('personaplex_enabled').catch(() => null);
+    const savedUrl = await memory.getPreference('personaplex_url').catch(() => null);
+    const savedVoice = await memory.getPreference('personaplex_voice').catch(() => null);
+    const savedPersona = await memory.getPreference('personaplex_persona').catch(() => null);
+
+    if (savedEnabled) {
+      personaplexEnabled = true;
+      if (toggle) toggle.checked = true;
+      if (settingsDiv) settingsDiv.style.display = '';
+    }
+    if (savedUrl) {
+      personaplexVoice.serverUrl = savedUrl;
+      if (urlInput) urlInput.value = savedUrl;
+    }
+    if (savedVoice) {
+      personaplexVoice.voicePrompt = savedVoice;
+      if (voicePicker) voicePicker.value = savedVoice;
+    }
+    if (savedPersona) {
+      personaplexVoice.personaText = savedPersona;
+      if (personaInput) personaInput.value = savedPersona;
+    }
+  })();
+
+  if (toggle) {
+    toggle.addEventListener('change', () => {
+      personaplexEnabled = toggle.checked;
+      if (settingsDiv) settingsDiv.style.display = personaplexEnabled ? '' : 'none';
+      savePref('personaplex_enabled', personaplexEnabled);
+      if (!personaplexEnabled && personaplexVoice.isRecording) {
+        personaplexVoice.stopConversation();
+        const btn = document.getElementById('conv-btn');
+        if (btn) btn.classList.remove('active');
+        const input = document.getElementById('chat-input');
+        if (input) input.placeholder = 'Message...';
+      }
+    });
+  }
+
+  if (urlInput) {
+    urlInput.addEventListener('change', () => {
+      personaplexVoice.serverUrl = urlInput.value.trim() || 'https://localhost:8998';
+      savePref('personaplex_url', personaplexVoice.serverUrl);
+    });
+  }
+
+  if (voicePicker) {
+    voicePicker.addEventListener('change', () => {
+      personaplexVoice.voicePrompt = voicePicker.value;
+      savePref('personaplex_voice', voicePicker.value);
+    });
+  }
+
+  if (personaInput) {
+    personaInput.addEventListener('change', () => {
+      personaplexVoice.personaText = personaInput.value.trim();
+      savePref('personaplex_persona', personaInput.value.trim());
+    });
+  }
+
+  if (testBtn && statusEl) {
+    testBtn.addEventListener('click', async () => {
+      testBtn.disabled = true;
+      statusEl.textContent = 'Connecting…';
+      statusEl.style.color = 'var(--text-secondary,#888)';
+      try {
+        await personaplexVoice.testConnection();
+        statusEl.textContent = '✓ Connected to PersonaPlex server';
+        statusEl.style.color = '#4caf50';
+      } catch (err) {
+        statusEl.textContent = '✗ ' + (err.message || 'Connection failed');
+        statusEl.style.color = '#f44336';
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+  }
+}
+
+/**
+ * Initialise the Browser Voice AI settings panel and restore saved preferences.
+ */
+function initBrowserVoiceSettingsUI() {
+  const toggle = document.getElementById('browser-voice-ai-toggle');
+  const settingsDiv = document.getElementById('browser-voice-ai-settings');
+  const modelSelect = document.getElementById('browser-voice-ai-model');
+  const preloadBtn = document.getElementById('browser-voice-ai-preload-btn');
+  const progressWrap = document.getElementById('browser-voice-ai-progress');
+  const progressBar = document.getElementById('browser-voice-ai-progress-bar');
+  const progressText = document.getElementById('browser-voice-ai-progress-text');
+  const statusEl = document.getElementById('browser-voice-ai-status');
+
+  // Restore saved preferences.
+  (async () => {
+    const savedEnabled = await memory.getPreference('browser_voice_ai_enabled').catch(() => null);
+    const savedModel = await memory.getPreference('browser_voice_ai_model').catch(() => null);
+    if (savedEnabled) {
+      browserVoiceAIEnabled = true;
+      if (toggle) toggle.checked = true;
+      if (settingsDiv) settingsDiv.style.display = '';
+    }
+    if (savedModel && modelSelect) {
+      modelSelect.value = savedModel;
+      browserVoiceAI.model = savedModel;
+    }
+
+    // Show a badge if the model is already in the browser cache so the user
+    // knows they won't have to re-download it.
+    if (statusEl) {
+      const cached = await browserVoiceAI.checkModelCached().catch(() => false);
+      if (cached) {
+        statusEl.textContent = '✓ Model already downloaded — ready to use offline';
+        statusEl.style.color = '#4caf50';
+      }
+    }
+  })();
+
+  // Toggle visibility.
+  if (toggle) {
+    toggle.addEventListener('change', () => {
+      browserVoiceAIEnabled = toggle.checked;
+      if (settingsDiv) settingsDiv.style.display = browserVoiceAIEnabled ? '' : 'none';
+      savePref('browser_voice_ai_enabled', browserVoiceAIEnabled);
+      if (!browserVoiceAIEnabled && browserVoiceAI.conversationMode) {
+        browserVoiceAI.stopConversation();
+        const btn = document.getElementById('conv-btn');
+        if (btn) btn.classList.remove('active');
+        const input = document.getElementById('chat-input');
+        if (input) input.placeholder = 'Message...';
+      }
+    });
+  }
+
+  // Model selection.
+  if (modelSelect) {
+    modelSelect.addEventListener('change', async () => {
+      browserVoiceAI.model = modelSelect.value;
+      browserVoiceAI.resetModel();
+      savePref('browser_voice_ai_model', modelSelect.value);
+      if (statusEl) {
+        const cached = await browserVoiceAI.checkModelCached().catch(() => false);
+        if (cached) {
+          statusEl.textContent = '✓ Model already downloaded — ready to use offline';
+          statusEl.style.color = '#4caf50';
+        } else {
+          statusEl.textContent = 'Model changed — will download on next use.';
+          statusEl.style.color = '';
+        }
+      }
+    });
+  }
+
+  // Pre-load button.
+  if (preloadBtn) {
+    preloadBtn.addEventListener('click', async () => {
+      preloadBtn.disabled = true;
+      if (progressWrap) progressWrap.style.display = '';
+      if (progressBar) progressBar.style.width = '0%';
+      if (progressText) progressText.textContent = 'Starting download…';
+      if (statusEl) statusEl.textContent = '';
+
+      browserVoiceAI.onProgress = (info) => {
+        if (info.status === 'progress' && info.total) {
+          const pct = Math.round((info.loaded / info.total) * 100);
+          if (progressBar) progressBar.style.width = pct + '%';
+          const mb = (info.loaded / 1048576).toFixed(1);
+          const total = (info.total / 1048576).toFixed(1);
+          if (progressText) progressText.textContent = `${info.file || ''} — ${mb} / ${total} MB (${pct}%)`;
+        } else if (info.status === 'done') {
+          if (progressText) progressText.textContent = `${info.file || ''} — done`;
+        }
+      };
+
+      try {
+        await browserVoiceAI.loadModel();
+        if (progressBar) progressBar.style.width = '100%';
+        if (statusEl) {
+          statusEl.textContent = '✓ Model loaded and ready';
+          statusEl.style.color = '#4caf50';
+        }
+      } catch (err) {
+        if (statusEl) {
+          statusEl.textContent = '✗ ' + (err.message || 'Failed to load model');
+          statusEl.style.color = '#f44336';
+        }
+      } finally {
+        preloadBtn.disabled = false;
+      }
+    });
+  }
+}
 
 function handleProviderChange() {
   const select = document.getElementById('cloud-provider');
@@ -2791,6 +2662,14 @@ async function handleClearData() {
   if (!confirm('Delete all conversations and settings?')) return;
   try {
     if (memoryReady) await memory.clearAll();
+    // Clear all localStorage keys used by the app
+    [
+      'ai-space-visited',
+      'ai-space-kv-strategy',
+      'ai-space-kv-ctx',
+      'ai-space-kv-script',
+      'ai-space-selected-model'
+    ].forEach(k => localStorage.removeItem(k));
     state.messages = [];
     state.conversationId = null;
     ui.clearMessages();
@@ -2861,6 +2740,85 @@ async function handleConversation() {
   const btn = document.getElementById('conv-btn');
   const input = document.getElementById('chat-input');
 
+  // ── PersonaPlex full-duplex mode ──────────────────────────────────────────
+  if (personaplexEnabled) {
+    if (personaplexVoice.isRecording) {
+      personaplexVoice.stopConversation();
+      btn.classList.remove('active');
+      input.value = '';
+      input.placeholder = 'Message...';
+      return;
+    }
+    if (!personaplexVoice.supported) {
+      ui.showNotification('PersonaPlex requires WebSocket and WebAudio support.', 'error');
+      return;
+    }
+    try {
+      btn.classList.add('active');
+      await personaplexVoice.startConversation();
+    } catch (err) {
+      btn.classList.remove('active');
+      input.placeholder = 'Message...';
+      ui.showNotification(err.message || 'Could not start PersonaPlex session.', 'error');
+    }
+    return;
+  }
+
+  // ── Browser Voice AI (Whisper STT, fully offline) ─────────────────────────
+  if (browserVoiceAIEnabled) {
+    if (browserVoiceAI.conversationMode) {
+      browserVoiceAI.stopConversation();
+      btn.classList.remove('active');
+      input.value = '';
+      input.placeholder = 'Message...';
+      return;
+    }
+    if (!browserVoiceAI.supported) {
+      ui.showNotification('Browser Voice AI requires MediaRecorder + AudioContext support.', 'error');
+      return;
+    }
+
+    browserVoiceAI.onStateChange = (s) => {
+      const labels = {
+        loading: 'Loading Whisper model…',
+        listening: 'Listening (offline)…',
+        transcribing: 'Transcribing…',
+        thinking: 'Thinking…',
+        speaking: 'Speaking…',
+        idle: 'Message...',
+      };
+      if (input) input.placeholder = labels[s] || 'Message...';
+    };
+
+    browserVoiceAI.onTranscript = (text) => {
+      if (input) { input.value = text; ui.autoResizeInput(); }
+    };
+
+    browserVoiceAI.onError = (err) => {
+      ui.showNotification(err.message || 'Browser Voice AI error', 'error');
+      btn.classList.remove('active');
+      input.placeholder = 'Message...';
+    };
+
+    try {
+      btn.classList.add('active');
+      input.placeholder = 'Loading Whisper model…';
+
+      await browserVoiceAI.startConversation(async (userText) => {
+        if (input) { input.value = ''; ui.autoResizeInput(); }
+        await sendMessage(userText);
+        const last = state.messages[state.messages.length - 1];
+        return (last && last.role === 'assistant') ? last.content : '';
+      });
+    } catch (err) {
+      btn.classList.remove('active');
+      input.placeholder = 'Message...';
+      ui.showNotification(err.message || 'Could not start Browser Voice AI.', 'error');
+    }
+    return;
+  }
+
+  // ── Standard browser conversation mode ───────────────────────────────────
   if (!voice.supported) {
     ui.showNotification('Voice not supported', 'error');
     return;
@@ -2900,6 +2858,8 @@ async function handleConversation() {
         }
 
         if (!finalText) {
+          // Resume so conversation mode keeps listening after noise/empty silence.
+          if (voice.conversationMode) voice.resumeListening().catch(() => {});
           return;
         }
 
@@ -3021,6 +2981,58 @@ voice.onStateChange = (s) => {
         input.placeholder = 'Message...';
       }
   }
+};
+
+personaplexVoice.onStateChange = (s) => {
+  const convBtn = document.getElementById('conv-btn');
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+
+  const voiceStateClasses = ['listening', 'processing', 'speaking'];
+  if (convBtn) voiceStateClasses.forEach((c) => convBtn.classList.remove(c));
+
+  switch (s) {
+    case 'connecting':
+      input.placeholder = 'Connecting to PersonaPlex...';
+      break;
+    case 'listening':
+      input.placeholder = 'PersonaPlex listening...';
+      if (convBtn) convBtn.classList.add('listening');
+      break;
+    case 'speaking':
+      input.placeholder = 'PersonaPlex speaking...';
+      if (convBtn) convBtn.classList.add('speaking');
+      break;
+    default:
+      if (convBtn) {
+        convBtn.classList.remove('active');
+        voiceStateClasses.forEach((c) => convBtn.classList.remove(c));
+      }
+      input.placeholder = 'Message...';
+  }
+};
+
+personaplexVoice.onTranscript = (text) => {
+  // Show the user transcript in the chat as a user message
+  if (text && text.trim()) {
+    const input = document.getElementById('chat-input');
+    if (input) input.value = text.trim();
+  }
+};
+
+personaplexVoice.onAssistantText = (text) => {
+  // Show assistant text transcript in chat if available
+  if (text && text.trim()) {
+    appendMessage({ role: 'assistant', content: text.trim() });
+  }
+};
+
+personaplexVoice.onError = (err) => {
+  ui.showNotification(err.message, 'error');
+  const btn = document.getElementById('conv-btn');
+  if (btn) btn.classList.remove('active');
+  const input = document.getElementById('chat-input');
+  if (input) input.placeholder = 'Message...';
 };
 
 /**

@@ -5,6 +5,7 @@ const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
+  './robots.txt',
   './icons/icon.svg',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',
@@ -56,6 +57,12 @@ self.addEventListener('fetch', (event) => {
     const hostname = url.hostname;
     if (hostname === 'huggingface.co' || (hostname.endsWith('.huggingface.co') && hostname.length > '.huggingface.co'.length) || url.pathname.endsWith('.wasm') || url.pathname.endsWith('.bin')) {
       event.respondWith(cacheFirst(event.request, MODEL_CACHE));
+      return;
+    }
+    // Cache transformers.js JS/WASM bundles from jsdelivr so they work offline
+    if (hostname === 'cdn.jsdelivr.net') {
+      event.respondWith(cacheFirst(event.request, MODEL_CACHE));
+      return;
     }
     return;
   }
@@ -106,15 +113,18 @@ async function cacheFirst(request, cacheName) {
 
 /**
  * Network-first strategy for navigation/doc requests.
+ * Injects COOP/COEP headers on the response so SharedArrayBuffer and WebGPU
+ * work in browsers that require cross-origin isolation (e.g. Chrome).
  */
 async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
     const response = await fetch(request);
+    const stamped = stampCrossOriginIsolation(response);
     if (response.ok || response.type === 'opaque') {
-      cache.put(request, response.clone());
+      cache.put(request, stamped.clone());
     }
-    return response;
+    return stamped;
   } catch {
     const cached = await cache.match(request);
     if (cached) return cached;
@@ -123,6 +133,20 @@ async function networkFirst(request, cacheName) {
     if (fallback) return fallback;
     throw new Error('Offline and no cached page available');
   }
+}
+
+/**
+ * Clone a response and add Cross-Origin-Opener-Policy /
+ * Cross-Origin-Embedder-Policy headers required for cross-origin isolation.
+ * Only applied to same-origin HTML responses; other response types are returned as-is.
+ */
+function stampCrossOriginIsolation(response) {
+  const ct = response.headers.get('content-type') || '';
+  if (!ct.includes('text/html')) return response;
+  const headers = new Headers(response.headers);
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 /**

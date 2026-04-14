@@ -3334,6 +3334,52 @@
             <option value="-1">Auto (best English voice)</option>
           </select>
           <button class="settings-btn" id="voice-preview-btn" style="margin-top:8px;">Preview voice</button>
+
+          <div class="settings-row" style="border:none;padding:16px 0 0;">
+            <label class="settings-row-label" for="personaplex-toggle">PersonaPlex voice (local server)</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="personaplex-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="personaplex-settings" style="display:none;">
+            <label class="settings-input-label" style="margin-top:4px;">Server URL</label>
+            <input class="settings-input" id="personaplex-url" type="text" placeholder="https://localhost:8998" value="https://localhost:8998">
+            <label class="settings-input-label" style="margin-top:8px;">Voice Model</label>
+            <select class="settings-input" id="personaplex-voice-picker" style="appearance:auto;-webkit-appearance:auto;"></select>
+            <label class="settings-input-label" style="margin-top:8px;">Persona Prompt</label>
+            <textarea class="settings-input" id="personaplex-persona" rows="3" style="resize:vertical;margin-top:4px;">You enjoy having a good conversation.</textarea>
+            <button class="settings-btn" id="personaplex-test-btn" style="margin-top:8px;">Test Connection</button>
+            <div id="personaplex-status" style="font-size:12px;color:var(--text-secondary,#888);margin-top:6px;min-height:16px;"></div>
+          </div>
+
+          <div class="settings-row" style="border:none;padding:16px 0 0;">
+            <label class="settings-row-label" for="browser-voice-ai-toggle">Browser Voice AI (offline, no server)</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="browser-voice-ai-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="browser-voice-ai-settings" style="display:none;">
+            <p style="font-size:12px;color:var(--text-secondary,#888);margin:4px 0 8px;">
+              Uses <strong>Whisper</strong> for speech recognition — runs entirely in your browser.
+              The model (~75–145&nbsp;MB) is downloaded once and cached.
+            </p>
+            <label class="settings-input-label">Whisper Model</label>
+            <select class="settings-input" id="browser-voice-ai-model" style="appearance:auto;-webkit-appearance:auto;">
+              <option value="Xenova/whisper-tiny" selected>whisper-tiny (~75 MB, fastest)</option>
+              <option value="Xenova/whisper-base">whisper-base (~145 MB, balanced)</option>
+              <option value="Xenova/whisper-small">whisper-small (~488 MB, highest quality)</option>
+            </select>
+            <button class="settings-btn" id="browser-voice-ai-preload-btn" style="margin-top:8px;">Pre-load Model</button>
+            <div id="browser-voice-ai-progress" style="margin-top:6px;display:none;">
+              <div style="background:var(--surface,#333);border-radius:4px;height:6px;overflow:hidden;">
+                <div id="browser-voice-ai-progress-bar" style="height:100%;width:0%;background:var(--accent,#7c6af7);transition:width 0.2s;"></div>
+              </div>
+              <div id="browser-voice-ai-progress-text" style="font-size:11px;color:var(--text-secondary,#888);margin-top:4px;"></div>
+            </div>
+            <div id="browser-voice-ai-status" style="font-size:12px;color:var(--text-secondary,#888);margin-top:6px;min-height:16px;"></div>
+          </div>
         </div>
       </div>
 
@@ -3439,6 +3485,42 @@
       enterApp();
     }
   </script>
+<!-- Global error boundary: catches unhandled JS errors and promise rejections,
+     shows a non-intrusive toast so users know something went wrong. -->
+<script>
+  (function() {
+    function showErrorToast(message) {
+      var existing = document.getElementById('global-error-toast');
+      if (existing) { existing.remove(); }
+      var toast = document.createElement('div');
+      toast.id = 'global-error-toast';
+      toast.setAttribute('role', 'alert');
+      toast.style.cssText = [
+        'position:fixed', 'bottom:20px', 'left:50%', 'transform:translateX(-50%)',
+        'background:#1a1b2e', 'border:1px solid #ef4444', 'color:#fca5a5',
+        'padding:10px 18px', 'border-radius:10px', 'font-size:13px',
+        'z-index:99999', 'max-width:420px', 'text-align:center',
+        'box-shadow:0 4px 24px rgba(0,0,0,.6)', 'cursor:pointer'
+      ].join(';');
+      toast.textContent = message;
+      toast.title = 'Click to dismiss';
+      toast.addEventListener('click', function() { toast.remove(); });
+      document.body ? document.body.appendChild(toast) : document.addEventListener('DOMContentLoaded', function() { document.body.appendChild(toast); });
+      setTimeout(function() { if (toast.parentNode) toast.remove(); }, 8000);
+    }
+
+    window.addEventListener('error', function(e) {
+      var msg = (e && e.message) ? e.message : 'An unexpected error occurred.';
+      showErrorToast('⚠ ' + msg);
+    });
+
+    window.addEventListener('unhandledrejection', function(e) {
+      var reason = e && e.reason;
+      var msg = reason instanceof Error ? reason.message : (typeof reason === 'string' ? reason : 'An unhandled error occurred.');
+      showErrorToast('⚠ ' + msg);
+    });
+  })();
+</script>
 <!-- Command Palette -->
 <div class="cmd-backdrop" id="cmd-backdrop"></div>
 <div class="cmd-palette" id="cmd-palette" role="dialog" aria-modal="true" aria-label="Command Palette">
