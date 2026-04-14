@@ -418,9 +418,13 @@ export class BrowserVoiceAI {
       for (const name of cacheNames) {
         const cache = await caches.open(name);
         const keys = await cache.keys();
-        // Model shards are stored as Hugging Face CDN URLs containing the model id.
-        const modelSlug = this.model.replace('/', '/');
-        const found = keys.some(req => req.url.includes(modelSlug));
+        // Model shards are stored as Hugging Face CDN URLs that include the
+        // full model id, e.g. "Xenova/whisper-tiny". Check for both the
+        // raw id and its URL-encoded variant ("%2F").
+        const found = keys.some(req =>
+          req.url.includes(this.model) ||
+          req.url.includes(encodeURIComponent(this.model))
+        );
         if (found) return true;
       }
     } catch {

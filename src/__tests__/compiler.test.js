@@ -380,20 +380,3 @@ describe('Minifier', () => {
     expect(out).not.toContain('comment');
   });
 });
-
-// ─── Minifier ─────────────────────────────────────────────────────────────────
-
-describe('Minifier', () => {
-  it('reduces whitespace in simple code', () => {
-    const m = new Minifier();
-    const src = 'let   x   =   1;';
-    const out = m.minify(src);
-    expect(out.length).toBeLessThan(src.length);
-  });
-
-  it('strips single-line comments', () => {
-    const m = new Minifier();
-    const out = m.minify('let x = 1; // comment\n');
-    expect(out).not.toContain('comment');
-  });
-});
