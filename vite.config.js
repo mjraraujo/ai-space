@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, createHash } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
+import { createHash } from 'crypto';
 import { resolve } from 'path';
 
 function copyAssetsPlugin() {
