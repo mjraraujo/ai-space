@@ -404,6 +404,31 @@ export class BrowserVoiceAI {
     this._loadPromise = null;
   }
 
+  /**
+   * Check whether the Whisper model files are already cached in the browser's
+   * Cache API (populated on a previous loadModel() call).
+   *
+   * @returns {Promise<boolean>} `true` when at least one model shard for the
+   *   currently selected model is present in any open cache.
+   */
+  async checkModelCached() {
+    if (typeof caches === 'undefined') return false;
+    try {
+      const cacheNames = await caches.keys();
+      for (const name of cacheNames) {
+        const cache = await caches.open(name);
+        const keys = await cache.keys();
+        // Model shards are stored as Hugging Face CDN URLs containing the model id.
+        const modelSlug = this.model.replace('/', '/');
+        const found = keys.some(req => req.url.includes(modelSlug));
+        if (found) return true;
+      }
+    } catch {
+      // caches.keys() can throw in non-secure contexts — treat as not cached.
+    }
+    return false;
+  }
+
   // ─── Conversation loop ──────────────────────────────────────────────────────
 
   /**
