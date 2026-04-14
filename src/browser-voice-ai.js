@@ -1,15 +1,17 @@
 /**
- * BrowserVoiceAI — fully browser-native, server-free voice conversation.
+ * BrowserVoiceAI — fully browser-native voice conversation with optional
+ * server-side transcription backend.
  *
- * Pipeline (all running in-browser, zero external servers required):
- *   Mic → MediaRecorder → Whisper (transformers.js WASM/WebGPU) → text
- *   → AI Engine callback → response text
- *   → SpeechSynthesis → audio output → repeat
+ * Transcription backend priority (auto-detected):
+ *   1. Server Whisper (faster-whisper via /api/transcribe) — 10× faster, full accuracy.
+ *   2. WebGPU Whisper (transformers.js) — on-device, no server required.
+ *   3. WASM Whisper (transformers.js) — broadest compatibility fallback.
  *
- * The Whisper model is downloaded once from Hugging Face CDN (~75–145 MB) and
- * cached in the browser's Cache API for subsequent uses.
+ * The server backend is used when `window.__SERVER_URL__` is set and the
+ * /api/transcribe endpoint is reachable. Set `useServerTranscription = false`
+ * to disable it and force the in-browser path.
  *
- * Whisper model options (set BrowserVoiceAI#model before calling loadModel):
+ * Browser Whisper model options (set BrowserVoiceAI#model before calling loadModel):
  *   'Xenova/whisper-tiny'   ~75 MB  — fastest, good for English
  *   'Xenova/whisper-base'   ~145 MB — balanced quality
  *   'Xenova/whisper-small'  ~488 MB — highest quality
@@ -24,6 +26,10 @@ const SILENCE_MS = 1800;
 /** Minimum ms of speech required before a segment is accepted. */
 const MIN_SPEECH_MS = 400;
 
+/** Derive the API server URL injected by nginx (or empty string). */
+const _SERVER_URL = () =>
+  ((typeof window !== 'undefined' && window.__SERVER_URL__) || '').replace(/\/+$/, '');
+
 export class BrowserVoiceAI {
   constructor() {
     /** Whisper model name from Hugging Face hub. */
@@ -34,6 +40,11 @@ export class BrowserVoiceAI {
     this.conversationMode = false;
     /** Whether audio is currently being captured. */
     this.isRecording = false;
+    /**
+     * When true (default), prefer server-side transcription if the AI Space
+     * server is available. Set to false to always use in-browser Whisper.
+     */
+    this.useServerTranscription = true;
 
     this._pipeline = null;
     this._loadPromise = null;
@@ -166,7 +177,32 @@ export class BrowserVoiceAI {
     return (result.text || '').trim();
   }
 
-  // ─── Audio recording with silence detection ─────────────────────────────────
+  // ─── Transcription routing ──────────────────────────────────────────────────
+
+  /**
+   * Attempt transcription via the AI Space backend (faster-whisper).
+   * Returns null on any failure so the caller can fall back to browser Whisper.
+   * @param {Blob} blob
+   * @returns {Promise<string|null>}
+   */
+  async _transcribeViaServer(blob) {
+    const serverUrl = _SERVER_URL();
+    if (!serverUrl) return null;
+    try {
+      const res = await fetch(`${serverUrl}/api/transcribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type || 'audio/webm' },
+        body: blob,
+        signal: AbortSignal.timeout(30_000)
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return (data.text || '').trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
 
   /**
    * Start microphone capture.  Resolves once the stream is open.
@@ -447,13 +483,19 @@ export class BrowserVoiceAI {
     this.conversationMode = true;
     this._stopRequested = false;
 
-    // Pre-load the Whisper model while telling the user what's happening.
-    try {
-      await this.loadModel();
-    } catch (err) {
-      this.conversationMode = false;
-      if (this.onError) this.onError(err);
-      throw err;
+    // Determine transcription backend. Try server first; fall back to Whisper WASM/WebGPU.
+    const serverUrl = _SERVER_URL();
+    const useServer = this.useServerTranscription && Boolean(serverUrl);
+
+    // Pre-load the browser Whisper model only when no server backend is available.
+    if (!useServer) {
+      try {
+        await this.loadModel();
+      } catch (err) {
+        this.conversationMode = false;
+        if (this.onError) this.onError(err);
+        throw err;
+      }
     }
 
     // Conversation loop.
@@ -468,10 +510,17 @@ export class BrowserVoiceAI {
           continue;
         }
 
-        // 2. Transcribe.
+        // 2. Transcribe — try server first, fall back to in-browser Whisper.
         let text;
         try {
-          text = await this.transcribe(blob);
+          if (useServer) {
+            text = await this._transcribeViaServer(blob);
+          }
+          if (!text) {
+            // Server unavailable or returned empty — use browser Whisper.
+            await this.loadModel();
+            text = await this.transcribe(blob);
+          }
         } catch (err) {
           console.warn('[browser-voice-ai] Transcription failed:', err);
           continue;
