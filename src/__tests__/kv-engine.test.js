@@ -37,8 +37,8 @@ describe('estimateTokens', () => {
 // ─── KV_STRATEGIES ───────────────────────────────────────────────────────────
 
 describe('KV_STRATEGIES', () => {
-  it('has exactly 4 built-in strategies', () => {
-    expect(Object.keys(KV_STRATEGIES)).toHaveLength(4);
+  it('has exactly 5 built-in strategies', () => {
+    expect(Object.keys(KV_STRATEGIES)).toHaveLength(5);
   });
 
   it('has required keys on each strategy', () => {
@@ -258,9 +258,9 @@ describe('KVEngine', () => {
 
   // ── getStrategies ───────────────────────────────────────────────────────────
 
-  it('KVEngine.getStrategies() returns 4 items without fn', () => {
+  it('KVEngine.getStrategies() returns 5 items without fn', () => {
     const strategies = KVEngine.getStrategies();
-    expect(strategies).toHaveLength(4);
+    expect(strategies).toHaveLength(5);
     for (const s of strategies) {
       expect(s).not.toHaveProperty('fn');
       expect(s).toHaveProperty('id');
@@ -295,5 +295,65 @@ describe('setCustomScript() validation', () => {
     kv.setCustomScript('return messages;');
     kv.setCustomScript('');
     expect(kv._compiledCustom).toBeNull();
+  });
+});
+
+// ─── quantum-compress strategy ────────────────────────────────────────────────
+
+describe('quantum-compress strategy', () => {
+  const strategy = KV_STRATEGIES['quantum-compress'];
+
+  it('exists in KV_STRATEGIES', () => {
+    expect(strategy).toBeDefined();
+    expect(strategy.id).toBe('quantum-compress');
+    expect(typeof strategy.fn).toBe('function');
+  });
+
+  it('returns array for short conversations (passthrough)', () => {
+    const msgs = makeMessages(4);
+    const result = strategy.fn(msgs, 2000);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThan(0);
+  });
+
+  it('compresses longer conversations within budget', () => {
+    const msgs = makeMessages(20);
+    const budget = 500;
+    const result = strategy.fn(msgs, budget);
+    expect(Array.isArray(result)).toBe(true);
+    // Should fit within token budget
+    const totalTokens = result.reduce((s, m) => s + Math.ceil((m.content || '').length / 4), 0);
+    expect(totalTokens).toBeLessThanOrEqual(budget + 200); // allow small overage for synopsis
+  });
+
+  it('deduplicates near-identical messages', () => {
+    // Create 10 near-duplicate user messages
+    const identical = Array.from({ length: 10 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: 'What is the capital of France? Paris is the answer.'
+    }));
+    const recent = makeMessages(4);
+    const msgs = [...identical, ...recent];
+    const result = strategy.fn(msgs, 4000);
+    // Deduplication should reduce the older identical turns
+    expect(result.length).toBeLessThan(msgs.length);
+  });
+
+  it('always preserves the most recent turns', () => {
+    const msgs = makeMessages(16);
+    const result = strategy.fn(msgs, 300);
+    // The last message should always appear in the result
+    const lastMsg = msgs[msgs.length - 1];
+    const found = result.some((m) => m.content === lastMsg.content);
+    expect(found).toBe(true);
+  });
+
+  it('can be set on KVEngine and used in optimize()', () => {
+    const kv = new KVEngine();
+    kv.setStrategy('quantum-compress');
+    expect(kv.strategy).toBe('quantum-compress');
+    const msgs = makeMessages(12);
+    const { messages } = kv.optimize(msgs, 2000);
+    expect(Array.isArray(messages)).toBe(true);
   });
 });

@@ -233,6 +233,147 @@ function strategyTurboCompress(messages, budget) {
   return [synopsis, ...recent];
 }
 
+// ─── Quantum-compress strategy ────────────────────────────────────────────────
+
+/**
+ * Quantum-Compress — highest-ratio strategy combining turbo-compress with
+ * near-duplicate deduplication and priority clustering.
+ *
+ * Algorithm:
+ *   1. Segment conversation into topic clusters (turn-to-turn similarity).
+ *   2. Within each cluster, keep only the highest-importance turn (dedup).
+ *   3. Condense all pruned clusters into a single ultra-compact synopsis.
+ *   4. Keep the most-recent KEEP_RECENT turns verbatim as the live window.
+ *
+ * Near-duplicate detection: two turns are considered duplicates when their
+ * Jaccard similarity on 3-gram token sets exceeds DEDUP_THRESHOLD. This is
+ * a lightweight embedding-free approximation that runs in O(n²) — acceptable
+ * for the typical conversation lengths (< 200 turns).
+ *
+ * @param {Message[]} messages
+ * @param {number} budget
+ * @returns {Message[]}
+ */
+function strategyQuantumCompress(messages, budget) {
+  if (messages.length <= 4) return trimToTokenBudget(messages, budget);
+
+  const KEEP_RECENT  = 4;   // verbatim window
+  const DEDUP_THRESH = 0.6; // Jaccard threshold for near-duplicates
+
+  const recent = messages.slice(-KEEP_RECENT);
+  const older  = messages.slice(0, -KEEP_RECENT);
+
+  if (older.length === 0) return trimToTokenBudget(messages, budget);
+
+  // ── Step 1: build 3-gram sets for deduplication ──────────────────────────
+  const ngramSets = older.map((m) => buildNgramSet(m.content, 3));
+
+  // ── Step 2: cluster near-duplicates and keep highest-importance rep ───────
+  const used    = new Array(older.length).fill(false);
+  const keepers = []; // indices of representative turns
+
+  for (let i = 0; i < older.length; i++) {
+    if (used[i]) continue;
+    let bestIdx = i;
+    let bestScore = importanceScore(older[i], i, older.length);
+    used[i] = true;
+
+    // Find all near-duplicates of turn i
+    for (let j = i + 1; j < older.length; j++) {
+      if (used[j]) continue;
+      if (jaccard(ngramSets[i], ngramSets[j]) >= DEDUP_THRESH) {
+        used[j] = true;
+        const score = importanceScore(older[j], j, older.length);
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = j;
+        }
+      }
+    }
+    keepers.push(bestIdx);
+  }
+
+  // ── Step 3: build quantum synopsis from non-keeper turns ─────────────────
+  const keeperSet = new Set(keepers);
+  const pruned    = older.filter((_, i) => !keeperSet.has(i));
+
+  const bullets = [];
+  for (let i = 0; i < pruned.length - 1; i += 2) {
+    const q = (pruned[i].content     || '').slice(0, 60).replace(/\n/g, ' ');
+    const a = (pruned[i + 1]?.content || '').slice(0, 60).replace(/\n/g, ' ');
+    if (q) bullets.push(`• ${q}${a ? ` ↦ ${a}` : ''}`);
+  }
+
+  // ── Step 4: assemble final context within budget ──────────────────────────
+  const recentTokens = estimateTokens(recent.map((m) => m.content).join(''));
+  let remaining = budget - recentTokens;
+
+  const parts = [];
+
+  if (bullets.length > 0) {
+    const synopsis = {
+      role: 'system',
+      content: `[Quantum-compressed context:\n${bullets.join('\n')}]`
+    };
+    const st = estimateTokens(synopsis.content);
+    if (st <= remaining) {
+      parts.push(synopsis);
+      remaining -= st;
+    }
+  }
+
+  // Add representative turns in original order, most important first
+  const rankedKeepers = keepers
+    .map((idx) => ({ idx, score: importanceScore(older[idx], idx, older.length) }))
+    .sort((a, b) => b.score - a.score);
+
+  const selectedIndices = new Set();
+  for (const { idx } of rankedKeepers) {
+    const t = estimateTokens(older[idx].content);
+    if (t <= remaining) {
+      selectedIndices.add(idx);
+      remaining -= t;
+    }
+    if (remaining < MIN_RECENT_TOKENS) break;
+  }
+
+  // Re-order selected turns by original position
+  const selectedTurns = older
+    .filter((_, i) => selectedIndices.has(i));
+
+  return [...parts, ...selectedTurns, ...recent];
+}
+
+// ─── N-gram / Jaccard helpers ─────────────────────────────────────────────────
+
+/**
+ * Build a Set of n-gram strings from text.
+ * @param {string} text
+ * @param {number} n
+ * @returns {Set<string>}
+ */
+function buildNgramSet(text, n) {
+  const tokens = (text || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const set = new Set();
+  for (let i = 0; i <= tokens.length - n; i++) {
+    set.add(tokens.slice(i, i + n).join(' '));
+  }
+  return set;
+}
+
+/**
+ * Jaccard similarity between two sets.
+ * @param {Set<string>} a
+ * @param {Set<string>} b
+ * @returns {number} 0–1
+ */
+function jaccard(a, b) {
+  if (a.size === 0 && b.size === 0) return 1;
+  let intersection = 0;
+  for (const x of a) { if (b.has(x)) intersection++; }
+  return intersection / (a.size + b.size - intersection);
+}
+
 // ─── Strategy map ────────────────────────────────────────────────────────────
 
 export const KV_STRATEGIES = {
@@ -267,6 +408,14 @@ export const KV_STRATEGIES = {
     description: 'Maximum token efficiency. Bullet-synopsis of old turns.',
     detail: 'Condenses older turns into a compact bullet list. Keeps only the most recent 6 turns verbatim. Best for large models with limited VRAM.',
     fn: strategyTurboCompress
+  },
+  'quantum-compress': {
+    id: 'quantum-compress',
+    name: 'Quantum Compress',
+    icon: '⟁',
+    description: 'Near-duplicate deduplication + priority clustering.',
+    detail: 'Groups similar turns into clusters, keeps only the most informative representative per cluster, then condenses the rest into an ultra-compact synopsis. Highest compression ratio.',
+    fn: strategyQuantumCompress
   }
 };
 

@@ -1,0 +1,39 @@
+# docker-compose.gpu.yml — GPU acceleration overlay.
+#
+# Apply on top of docker-compose.base.yml:
+#   docker compose -f docker-compose.base.yml -f docker-compose.gpu.yml up
+#
+# Requires: nvidia-container-toolkit (CUDA) or ROCm runtime (AMD).
+
+services:
+
+  # Enable GPU in Ollama for fast LLM inference
+  ollama:
+    image: ollama/ollama:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # AMD ROCm alternative — uncomment and remove the deploy block above:
+    # devices:
+    #   - /dev/kfd
+    #   - /dev/dri
+    # group_add:
+    #   - video
+
+  # Enable GPU in faster-whisper for accelerated transcription
+  faster-whisper:
+    image: fedirz/faster-whisper-server:latest-cuda
+    environment:
+      WHISPER__MODEL: large-v3-turbo
+      CUDA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

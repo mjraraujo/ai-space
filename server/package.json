@@ -1,0 +1,14 @@
+{
+  "name": "ai-space-server",
+  "version": "0.1.0",
+  "description": "AI Space backend API — Ollama proxy, KV cache, voice transcription",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  }
+}
