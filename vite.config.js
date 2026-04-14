@@ -1,24 +1,41 @@
 import { defineConfig } from 'vite';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, createHash } from 'fs';
 import { resolve } from 'path';
 
 function copyAssetsPlugin() {
   return {
     name: 'copy-pwa-assets',
-    writeBundle(options) {
+    writeBundle(options, bundle) {
       const outDir = options.dir || 'dist';
 
       if (!existsSync(outDir)) {
         mkdirSync(outDir, { recursive: true });
       }
 
-      const filesToCopy = ['sw.js', 'manifest.json'];
+      // Derive a short content hash from all output chunks for cache busting.
+      const hash = createHash('sha1');
+      for (const [, chunk] of Object.entries(bundle)) {
+        if (chunk.type === 'chunk') hash.update(chunk.code ?? '');
+      }
+      const buildHash = hash.digest('hex').slice(0, 8);
+
+      const filesToCopy = ['manifest.json'];
       for (const file of filesToCopy) {
         const src = resolve(__dirname, file);
         const dest = resolve(outDir, file);
         if (existsSync(src)) {
           writeFileSync(dest, readFileSync(src, 'utf-8'));
         }
+      }
+
+      // Stamp sw.js with the derived build hash so deployments always bust the cache.
+      const swSrc = resolve(__dirname, 'sw.js');
+      if (existsSync(swSrc)) {
+        const swContent = readFileSync(swSrc, 'utf-8').replace(
+          /const CACHE_VERSION = '[^']*'/,
+          `const CACHE_VERSION = 'ai-space-${buildHash}'`
+        );
+        writeFileSync(resolve(outDir, 'sw.js'), swContent);
       }
 
       // Copy public/icons (all files)
@@ -55,7 +72,8 @@ export default defineConfig({
   plugins: [copyAssetsPlugin()],
   server: {
     headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin'
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp'
     }
   }
 });
