@@ -9,6 +9,7 @@ import { Shortcuts } from './shortcuts.js';
 import { UI } from './ui.js';
 import { Voice } from './voice.js';
 import { PersonaPlexVoice, PERSONAPLEX_VOICES } from './personaplex-voice.js';
+import { BrowserVoiceAI } from './browser-voice-ai.js';
 import { Camera } from './camera.js';
 import { deviceAuthFlow, getAuthIssuer, getClientIdOverride, setClientIdOverride, clearClientIdOverride } from './codex-auth.js';
 import { RelayHub } from './relays.js';
@@ -72,6 +73,8 @@ const sceneManager = new SceneManager();
 const voice = new Voice();
 const personaplexVoice = new PersonaPlexVoice();
 let personaplexEnabled = false;
+const browserVoiceAI = new BrowserVoiceAI();
+let browserVoiceAIEnabled = false;
 const camera = new Camera();
 let ui = null;
 let memoryReady = false;
@@ -1423,6 +1426,9 @@ function wireEventListeners() {
   // PersonaPlex settings
   initPersonaPlexSettingsUI();
 
+  // Browser Voice AI settings
+  initBrowserVoiceSettingsUI();
+
   // Local model switch
   const switchModelBtn = document.getElementById('switch-model-btn');
   if (switchModelBtn) switchModelBtn.addEventListener('click', handleSwitchModel);
@@ -2675,6 +2681,100 @@ function initPersonaPlexSettingsUI() {
   }
 }
 
+/**
+ * Initialise the Browser Voice AI settings panel and restore saved preferences.
+ */
+function initBrowserVoiceSettingsUI() {
+  const toggle = document.getElementById('browser-voice-ai-toggle');
+  const settingsDiv = document.getElementById('browser-voice-ai-settings');
+  const modelSelect = document.getElementById('browser-voice-ai-model');
+  const preloadBtn = document.getElementById('browser-voice-ai-preload-btn');
+  const progressWrap = document.getElementById('browser-voice-ai-progress');
+  const progressBar = document.getElementById('browser-voice-ai-progress-bar');
+  const progressText = document.getElementById('browser-voice-ai-progress-text');
+  const statusEl = document.getElementById('browser-voice-ai-status');
+
+  // Restore saved preferences.
+  (async () => {
+    const savedEnabled = await memory.getPreference('browser_voice_ai_enabled').catch(() => null);
+    const savedModel = await memory.getPreference('browser_voice_ai_model').catch(() => null);
+    if (savedEnabled) {
+      browserVoiceAIEnabled = true;
+      if (toggle) toggle.checked = true;
+      if (settingsDiv) settingsDiv.style.display = '';
+    }
+    if (savedModel && modelSelect) {
+      modelSelect.value = savedModel;
+      browserVoiceAI.model = savedModel;
+    }
+  })();
+
+  // Toggle visibility.
+  if (toggle) {
+    toggle.addEventListener('change', () => {
+      browserVoiceAIEnabled = toggle.checked;
+      if (settingsDiv) settingsDiv.style.display = browserVoiceAIEnabled ? '' : 'none';
+      savePref('browser_voice_ai_enabled', browserVoiceAIEnabled);
+      if (!browserVoiceAIEnabled && browserVoiceAI.conversationMode) {
+        browserVoiceAI.stopConversation();
+        const btn = document.getElementById('conv-btn');
+        if (btn) btn.classList.remove('active');
+        const input = document.getElementById('chat-input');
+        if (input) input.placeholder = 'Message...';
+      }
+    });
+  }
+
+  // Model selection.
+  if (modelSelect) {
+    modelSelect.addEventListener('change', () => {
+      browserVoiceAI.model = modelSelect.value;
+      browserVoiceAI.resetModel();
+      savePref('browser_voice_ai_model', modelSelect.value);
+      if (statusEl) statusEl.textContent = 'Model changed — will download on next use.';
+    });
+  }
+
+  // Pre-load button.
+  if (preloadBtn) {
+    preloadBtn.addEventListener('click', async () => {
+      preloadBtn.disabled = true;
+      if (progressWrap) progressWrap.style.display = '';
+      if (progressBar) progressBar.style.width = '0%';
+      if (progressText) progressText.textContent = 'Starting download…';
+      if (statusEl) statusEl.textContent = '';
+
+      browserVoiceAI.onProgress = (info) => {
+        if (info.status === 'progress' && info.total) {
+          const pct = Math.round((info.loaded / info.total) * 100);
+          if (progressBar) progressBar.style.width = pct + '%';
+          const mb = (info.loaded / 1048576).toFixed(1);
+          const total = (info.total / 1048576).toFixed(1);
+          if (progressText) progressText.textContent = `${info.file || ''} — ${mb} / ${total} MB (${pct}%)`;
+        } else if (info.status === 'done') {
+          if (progressText) progressText.textContent = `${info.file || ''} — done`;
+        }
+      };
+
+      try {
+        await browserVoiceAI.loadModel();
+        if (progressBar) progressBar.style.width = '100%';
+        if (statusEl) {
+          statusEl.textContent = '✓ Model loaded and ready';
+          statusEl.style.color = '#4caf50';
+        }
+      } catch (err) {
+        if (statusEl) {
+          statusEl.textContent = '✗ ' + (err.message || 'Failed to load model');
+          statusEl.style.color = '#f44336';
+        }
+      } finally {
+        preloadBtn.disabled = false;
+      }
+    });
+  }
+}
+
 function handleProviderChange() {
   const select = document.getElementById('cloud-provider');
   const customFields = document.getElementById('cloud-custom-fields');
@@ -3012,6 +3112,60 @@ async function handleConversation() {
       btn.classList.remove('active');
       input.placeholder = 'Message...';
       ui.showNotification(err.message || 'Could not start PersonaPlex session.', 'error');
+    }
+    return;
+  }
+
+  // ── Browser Voice AI (Whisper STT, fully offline) ─────────────────────────
+  if (browserVoiceAIEnabled) {
+    if (browserVoiceAI.conversationMode) {
+      browserVoiceAI.stopConversation();
+      btn.classList.remove('active');
+      input.value = '';
+      input.placeholder = 'Message...';
+      return;
+    }
+    if (!browserVoiceAI.supported) {
+      ui.showNotification('Browser Voice AI requires MediaRecorder + AudioContext support.', 'error');
+      return;
+    }
+
+    browserVoiceAI.onStateChange = (s) => {
+      const labels = {
+        loading: 'Loading Whisper model…',
+        listening: 'Listening (offline)…',
+        transcribing: 'Transcribing…',
+        thinking: 'Thinking…',
+        speaking: 'Speaking…',
+        idle: 'Message...',
+      };
+      if (input) input.placeholder = labels[s] || 'Message...';
+    };
+
+    browserVoiceAI.onTranscript = (text) => {
+      if (input) { input.value = text; ui.autoResizeInput(); }
+    };
+
+    browserVoiceAI.onError = (err) => {
+      ui.showNotification(err.message || 'Browser Voice AI error', 'error');
+      btn.classList.remove('active');
+      input.placeholder = 'Message...';
+    };
+
+    try {
+      btn.classList.add('active');
+      input.placeholder = 'Loading Whisper model…';
+
+      await browserVoiceAI.startConversation(async (userText) => {
+        if (input) { input.value = ''; ui.autoResizeInput(); }
+        await sendMessage(userText);
+        const last = state.messages[state.messages.length - 1];
+        return (last && last.role === 'assistant') ? last.content : '';
+      });
+    } catch (err) {
+      btn.classList.remove('active');
+      input.placeholder = 'Message...';
+      ui.showNotification(err.message || 'Could not start Browser Voice AI.', 'error');
     }
     return;
   }
