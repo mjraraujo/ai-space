@@ -8,6 +8,7 @@ import { Audit } from './audit.js';
 import { Shortcuts } from './shortcuts.js';
 import { UI } from './ui.js';
 import { Voice } from './voice.js';
+import { PersonaPlexVoice, PERSONAPLEX_VOICES } from './personaplex-voice.js';
 import { Camera } from './camera.js';
 import { deviceAuthFlow, getAuthIssuer, getClientIdOverride, setClientIdOverride, clearClientIdOverride } from './codex-auth.js';
 import { RelayHub } from './relays.js';
@@ -69,6 +70,8 @@ const themeEngine = new ThemeEngine();
 const avatarVoice = new AvatarVoiceEngine();
 const sceneManager = new SceneManager();
 const voice = new Voice();
+const personaplexVoice = new PersonaPlexVoice();
+let personaplexEnabled = false;
 const camera = new Camera();
 let ui = null;
 let memoryReady = false;
@@ -1417,6 +1420,9 @@ function wireEventListeners() {
     });
   }
 
+  // PersonaPlex settings
+  initPersonaPlexSettingsUI();
+
   // Local model switch
   const switchModelBtn = document.getElementById('switch-model-btn');
   if (switchModelBtn) switchModelBtn.addEventListener('click', handleSwitchModel);
@@ -2565,6 +2571,110 @@ const CLOUD_PROVIDERS = {
   }
 };
 
+/**
+ * Initialise the PersonaPlex settings panel and restore saved preferences.
+ */
+function initPersonaPlexSettingsUI() {
+  // Populate voice model dropdown
+  const voicePicker = document.getElementById('personaplex-voice-picker');
+  if (voicePicker) {
+    voicePicker.innerHTML = '';
+    PERSONAPLEX_VOICES.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = v.label;
+      voicePicker.appendChild(opt);
+    });
+  }
+
+  const toggle = document.getElementById('personaplex-toggle');
+  const settingsDiv = document.getElementById('personaplex-settings');
+  const urlInput = document.getElementById('personaplex-url');
+  const personaInput = document.getElementById('personaplex-persona');
+  const testBtn = document.getElementById('personaplex-test-btn');
+  const statusEl = document.getElementById('personaplex-status');
+
+  // Restore saved preferences
+  (async () => {
+    const savedEnabled = await memory.getPreference('personaplex_enabled').catch(() => null);
+    const savedUrl = await memory.getPreference('personaplex_url').catch(() => null);
+    const savedVoice = await memory.getPreference('personaplex_voice').catch(() => null);
+    const savedPersona = await memory.getPreference('personaplex_persona').catch(() => null);
+
+    if (savedEnabled) {
+      personaplexEnabled = true;
+      if (toggle) toggle.checked = true;
+      if (settingsDiv) settingsDiv.style.display = '';
+    }
+    if (savedUrl) {
+      personaplexVoice.serverUrl = savedUrl;
+      if (urlInput) urlInput.value = savedUrl;
+    }
+    if (savedVoice) {
+      personaplexVoice.voicePrompt = savedVoice;
+      if (voicePicker) voicePicker.value = savedVoice;
+    }
+    if (savedPersona) {
+      personaplexVoice.personaText = savedPersona;
+      if (personaInput) personaInput.value = savedPersona;
+    }
+  })();
+
+  if (toggle) {
+    toggle.addEventListener('change', () => {
+      personaplexEnabled = toggle.checked;
+      if (settingsDiv) settingsDiv.style.display = personaplexEnabled ? '' : 'none';
+      savePref('personaplex_enabled', personaplexEnabled);
+      if (!personaplexEnabled && personaplexVoice.isRecording) {
+        personaplexVoice.stopConversation();
+        const btn = document.getElementById('conv-btn');
+        if (btn) btn.classList.remove('active');
+        const input = document.getElementById('chat-input');
+        if (input) input.placeholder = 'Message...';
+      }
+    });
+  }
+
+  if (urlInput) {
+    urlInput.addEventListener('change', () => {
+      personaplexVoice.serverUrl = urlInput.value.trim() || 'https://localhost:8998';
+      savePref('personaplex_url', personaplexVoice.serverUrl);
+    });
+  }
+
+  if (voicePicker) {
+    voicePicker.addEventListener('change', () => {
+      personaplexVoice.voicePrompt = voicePicker.value;
+      savePref('personaplex_voice', voicePicker.value);
+    });
+  }
+
+  if (personaInput) {
+    personaInput.addEventListener('change', () => {
+      personaplexVoice.personaText = personaInput.value.trim();
+      savePref('personaplex_persona', personaInput.value.trim());
+    });
+  }
+
+  if (testBtn && statusEl) {
+    testBtn.addEventListener('click', async () => {
+      testBtn.disabled = true;
+      statusEl.textContent = 'Connecting…';
+      statusEl.style.color = 'var(--text-secondary,#888)';
+      try {
+        await personaplexVoice.testConnection();
+        statusEl.textContent = '✓ Connected to PersonaPlex server';
+        statusEl.style.color = '#4caf50';
+      } catch (err) {
+        statusEl.textContent = '✗ ' + (err.message || 'Connection failed');
+        statusEl.style.color = '#f44336';
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+  }
+}
+
 function handleProviderChange() {
   const select = document.getElementById('cloud-provider');
   const customFields = document.getElementById('cloud-custom-fields');
@@ -2882,6 +2992,31 @@ async function handleConversation() {
   const btn = document.getElementById('conv-btn');
   const input = document.getElementById('chat-input');
 
+  // ── PersonaPlex full-duplex mode ──────────────────────────────────────────
+  if (personaplexEnabled) {
+    if (personaplexVoice.isRecording) {
+      personaplexVoice.stopConversation();
+      btn.classList.remove('active');
+      input.value = '';
+      input.placeholder = 'Message...';
+      return;
+    }
+    if (!personaplexVoice.supported) {
+      ui.showNotification('PersonaPlex requires WebSocket and WebAudio support.', 'error');
+      return;
+    }
+    try {
+      btn.classList.add('active');
+      await personaplexVoice.startConversation();
+    } catch (err) {
+      btn.classList.remove('active');
+      input.placeholder = 'Message...';
+      ui.showNotification(err.message || 'Could not start PersonaPlex session.', 'error');
+    }
+    return;
+  }
+
+  // ── Standard browser conversation mode ───────────────────────────────────
   if (!voice.supported) {
     ui.showNotification('Voice not supported', 'error');
     return;
@@ -3044,6 +3179,58 @@ voice.onStateChange = (s) => {
         input.placeholder = 'Message...';
       }
   }
+};
+
+personaplexVoice.onStateChange = (s) => {
+  const convBtn = document.getElementById('conv-btn');
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+
+  const voiceStateClasses = ['listening', 'processing', 'speaking'];
+  if (convBtn) voiceStateClasses.forEach((c) => convBtn.classList.remove(c));
+
+  switch (s) {
+    case 'connecting':
+      input.placeholder = 'Connecting to PersonaPlex...';
+      break;
+    case 'listening':
+      input.placeholder = 'PersonaPlex listening...';
+      if (convBtn) convBtn.classList.add('listening');
+      break;
+    case 'speaking':
+      input.placeholder = 'PersonaPlex speaking...';
+      if (convBtn) convBtn.classList.add('speaking');
+      break;
+    default:
+      if (convBtn) {
+        convBtn.classList.remove('active');
+        voiceStateClasses.forEach((c) => convBtn.classList.remove(c));
+      }
+      input.placeholder = 'Message...';
+  }
+};
+
+personaplexVoice.onTranscript = (text) => {
+  // Show the user transcript in the chat as a user message
+  if (text && text.trim()) {
+    const input = document.getElementById('chat-input');
+    if (input) input.value = text.trim();
+  }
+};
+
+personaplexVoice.onAssistantText = (text) => {
+  // Show assistant text transcript in chat if available
+  if (text && text.trim()) {
+    appendMessage({ role: 'assistant', content: text.trim() });
+  }
+};
+
+personaplexVoice.onError = (err) => {
+  ui.showNotification(err.message, 'error');
+  const btn = document.getElementById('conv-btn');
+  if (btn) btn.classList.remove('active');
+  const input = document.getElementById('chat-input');
+  if (input) input.placeholder = 'Message...';
 };
 
 /**

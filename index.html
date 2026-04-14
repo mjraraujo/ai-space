@@ -3334,6 +3334,24 @@
             <option value="-1">Auto (best English voice)</option>
           </select>
           <button class="settings-btn" id="voice-preview-btn" style="margin-top:8px;">Preview voice</button>
+
+          <div class="settings-row" style="border:none;padding:16px 0 0;">
+            <label class="settings-row-label" for="personaplex-toggle">PersonaPlex voice (local server)</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="personaplex-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div id="personaplex-settings" style="display:none;">
+            <label class="settings-input-label" style="margin-top:4px;">Server URL</label>
+            <input class="settings-input" id="personaplex-url" type="text" placeholder="https://localhost:8998" value="https://localhost:8998">
+            <label class="settings-input-label" style="margin-top:8px;">Voice Model</label>
+            <select class="settings-input" id="personaplex-voice-picker" style="appearance:auto;-webkit-appearance:auto;"></select>
+            <label class="settings-input-label" style="margin-top:8px;">Persona Prompt</label>
+            <textarea class="settings-input" id="personaplex-persona" rows="3" style="resize:vertical;margin-top:4px;">You enjoy having a good conversation.</textarea>
+            <button class="settings-btn" id="personaplex-test-btn" style="margin-top:8px;">Test Connection</button>
+            <div id="personaplex-status" style="font-size:12px;color:var(--text-secondary,#888);margin-top:6px;min-height:16px;"></div>
+          </div>
         </div>
       </div>
 
