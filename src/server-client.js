@@ -18,34 +18,6 @@ const SERVER_URL = (
   ''
 ).replace(/\/+$/, '');
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-async function apiGet(path) {
-  const res = await fetch(`${SERVER_URL}${path}`, { signal: AbortSignal.timeout(10_000) });
-  if (!res.ok) throw new Error(`Server error ${res.status}`);
-  return res.json();
-}
-
-async function apiPost(path, body) {
-  const res = await fetch(`${SERVER_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000)
-  });
-  if (!res.ok) throw new Error(`Server error ${res.status}`);
-  return res.json();
-}
-
-async function apiDelete(path) {
-  const res = await fetch(`${SERVER_URL}${path}`, {
-    method: 'DELETE',
-    signal: AbortSignal.timeout(10_000)
-  });
-  if (!res.ok) throw new Error(`Server error ${res.status}`);
-  return res.json();
-}
-
 // ─── ServerClient ─────────────────────────────────────────────────────────────
 
 export class ServerClient {
@@ -87,6 +59,37 @@ export class ServerClient {
     }
   }
 
+  // ── Instance helpers ──────────────────────────────────────────────────────
+
+  /** @private */
+  async _get(path) {
+    const res = await fetch(`${this._url}${path}`, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    return res.json();
+  }
+
+  /** @private */
+  async _post(path, body) {
+    const res = await fetch(`${this._url}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000)
+    });
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    return res.json();
+  }
+
+  /** @private */
+  async _delete(path) {
+    const res = await fetch(`${this._url}${path}`, {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    return res.json();
+  }
+
   // ── Models ────────────────────────────────────────────────────────────────
 
   /**
@@ -94,7 +97,7 @@ export class ServerClient {
    * @returns {Promise<object[]>}
    */
   async listModels() {
-    const data = await apiGet(`${this._url}/api/models`);
+    const data = await this._get('/api/models');
     return data.models || [];
   }
 
@@ -103,7 +106,7 @@ export class ServerClient {
    * @returns {Promise<object[]>}
    */
   async getModelCatalog() {
-    const data = await apiGet(`${this._url}/api/models/catalog`);
+    const data = await this._get('/api/models/catalog');
     return data.catalog || [];
   }
 
@@ -112,7 +115,7 @@ export class ServerClient {
    * @returns {Promise<{ gpu: object|null, tier: string }>}
    */
   async getGpuInfo() {
-    return apiGet(`${this._url}/api/models/gpu`);
+    return this._get('/api/models/gpu');
   }
 
   /**
@@ -162,7 +165,7 @@ export class ServerClient {
    * @returns {Promise<{ ok: boolean }>}
    */
   async preloadModel(modelId) {
-    return apiPost(`${this._url}/api/models/preload`, { model: modelId });
+    return this._post('/api/models/preload', { model: modelId });
   }
 
   /**
@@ -171,7 +174,7 @@ export class ServerClient {
    * @returns {Promise<{ ok: boolean }>}
    */
   async deleteModel(modelId) {
-    return apiDelete(`${this._url}/api/models/${encodeURIComponent(modelId)}`);
+    return this._delete(`/api/models/${encodeURIComponent(modelId)}`);
   }
 
   // ── Chat ──────────────────────────────────────────────────────────────────
@@ -288,7 +291,7 @@ export class ServerClient {
    * @returns {Promise<object[]>}
    */
   async listVoices() {
-    const data = await apiGet(`${this._url}/api/voice/voices`);
+    const data = await this._get('/api/voice/voices');
     return data.voices || [];
   }
 
@@ -299,7 +302,7 @@ export class ServerClient {
    * @returns {Promise<object>}
    */
   async getKVStats() {
-    return apiGet(`${this._url}/api/kv/stats`);
+    return this._get('/api/kv/stats');
   }
 
   /**
@@ -307,7 +310,7 @@ export class ServerClient {
    * @returns {Promise<{ ok: boolean, flushed: number }>}
    */
   async flushKVCache() {
-    return apiPost(`${this._url}/api/kv/flush`, { confirm: true });
+    return this._post('/api/kv/flush', { confirm: true });
   }
 }
 

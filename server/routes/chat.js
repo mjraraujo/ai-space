@@ -12,7 +12,6 @@
  * Internally proxies to Ollama's /api/chat endpoint with KV context caching.
  */
 
-import { createHash } from 'node:crypto';
 import { createLogger } from '../logger.js';
 import { kvStore } from '../kv-store.js';
 
@@ -49,8 +48,7 @@ export async function handleChat(req, res) {
     return json(res, 400, { error: 'invalid model id' });
   }
 
-  // Build conversation hash for KV lookup
-  const convHash = hashMessages(messages);
+  // Look up cached KV context for this conversation
   const cachedContext = conversation_id
     ? kvStore.get(model, conversation_id)
     : null;
@@ -165,11 +163,6 @@ export async function handleChat(req, res) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function hashMessages(messages) {
-  const str = messages.map((m) => `${m.role}:${m.content}`).join('|');
-  return createHash('sha256').update(str).digest('hex').slice(0, 16);
-}
 
 function openAIChunk(model, delta) {
   return {

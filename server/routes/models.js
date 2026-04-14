@@ -134,7 +134,7 @@ function json(res, status, data) {
 async function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
-    req.on('data', (chunk) => { data += chunk; if (data.length > 1_048_576) req.destroy(); });
+    req.on('data', (chunk) => { data += chunk; if (data.length > 1_048_576) req.destroy(new Error('Body too large')); });
     req.on('end', () => {
       try { resolve(JSON.parse(data || '{}')); }
       catch { resolve({}); }

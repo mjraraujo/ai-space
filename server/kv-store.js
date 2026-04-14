@@ -29,7 +29,8 @@ export class KVStore {
       hits: 0,
       misses: 0,
       evictions: 0,
-      flushes: 0
+      flushes: 0,
+      writes: 0
     };
   }
 
@@ -145,8 +146,9 @@ export class KVStore {
 
   async _persist(key, data) {
     const file = this._slotPath(key);
-    await writeFile(file, JSON.stringify(data), 'utf8');
-    this._metrics.flushes++;
+    // Store the original key in the file so it can be recovered on reload
+    await writeFile(file, JSON.stringify({ ...data, _key: key }), 'utf8');
+    this._metrics.writes++;
   }
 
   async _loadPersistedSlots() {
@@ -159,15 +161,12 @@ export class KVStore {
       try {
         const raw = await readFile(join(this._dir, f), 'utf8');
         const data = JSON.parse(raw);
-        if (data.context && data.model) {
-          const key = f.replace(/\.json$/, '').replace(/_/g, (m, i) => {
-            // best-effort key recovery — not perfect but harmless
-            return m;
-          });
-          if (this._slots.size < MAX_SLOTS) {
-            this._slots.set(key, data);
-            loaded++;
-          }
+        // Use the persisted key if present; otherwise skip (unrecoverable)
+        const key = data._key;
+        if (key && data.context && data.model && this._slots.size < MAX_SLOTS) {
+          const { _key: _k, ...slot } = data;
+          this._slots.set(key, slot);
+          loaded++;
         }
       } catch {}
     }
