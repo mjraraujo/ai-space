@@ -272,7 +272,11 @@ export class PersonaPlexVoice {
       throw new Error('Microphone error: ' + err.message);
     }
 
-    // Capture PCM from microphone and stream to PersonaPlex via WebSocket
+    // Capture PCM from microphone and stream to PersonaPlex via WebSocket.
+    // ScriptProcessorNode is deprecated in favour of AudioWorkletNode, but it
+    // is universally supported in all current browsers and sufficient here.
+    // A future migration to AudioWorkletNode would require a separate worklet
+    // module file and is left as a follow-up improvement.
     const micSource = this._audioCtx.createMediaStreamSource(this._stream);
     this._processor = this._audioCtx.createScriptProcessor(SCRIPT_BUFFER_SIZE, 1, 1);
 
