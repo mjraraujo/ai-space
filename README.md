@@ -51,7 +51,7 @@ npm run build
 npx serve dist
 ```
 
-Serve over HTTPS with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers for WebGPU support.
+Serve over HTTPS with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` headers for WebGPU support.
 
 ---
 
