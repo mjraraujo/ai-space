@@ -62,7 +62,7 @@ export default defineConfig({
     globals: true,
     include: ['src/__tests__/**/*.test.js']
   },
-  base: '/ai-space/',
+  base: '/',
   root: '.',
   build: {
     outDir: 'dist',
