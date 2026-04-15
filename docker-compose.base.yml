@@ -30,6 +30,8 @@ services:
     depends_on:
       ai-server:
         condition: service_healthy
+    extra_hosts:
+      - "personaplex:host-gateway"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

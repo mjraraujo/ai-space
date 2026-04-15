@@ -16,6 +16,8 @@ services:
       SERVER_URL: "http://localhost:8080"
     depends_on:
       - ai-server
+    extra_hosts:
+      - "personaplex:host-gateway"
     restart: unless-stopped
 
   ai-server:
