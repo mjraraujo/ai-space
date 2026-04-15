@@ -20,6 +20,9 @@ services:
     depends_on:
       - ai-server
     extra_hosts:
+      # Maps the 'personaplex' hostname to the Docker host IP so the nginx
+      # container can proxy WebSocket connections to PersonaPlex (port 8998)
+      # running as a Python process on the host machine.  See README for setup.
       - "personaplex:host-gateway"
     restart: unless-stopped
 
