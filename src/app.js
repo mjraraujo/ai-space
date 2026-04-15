@@ -2244,6 +2244,11 @@ function initPersonaPlexSettingsUI() {
     if (savedUrl) {
       personaplexVoice.serverUrl = savedUrl;
       if (urlInput) urlInput.value = savedUrl;
+    } else if (window.__PERSONAPLEX_URL__) {
+      // Auto-configure from the PERSONAPLEX_URL env var injected by docker-entrypoint.sh.
+      // Operators set this to '/ws/voice' (nginx proxy) or an absolute URL.
+      personaplexVoice.serverUrl = window.__PERSONAPLEX_URL__;
+      if (urlInput) urlInput.value = window.__PERSONAPLEX_URL__;
     }
     if (savedVoice) {
       personaplexVoice.voicePrompt = savedVoice;
@@ -2306,6 +2311,20 @@ function initPersonaPlexSettingsUI() {
       } finally {
         testBtn.disabled = false;
       }
+    });
+  }
+
+  // "Use nginx proxy" quick-fill — sets the URL to the built-in nginx
+  // WebSocket proxy path that works automatically in Docker/VPS deployments.
+  const proxyBtn = document.getElementById('personaplex-proxy-btn');
+  if (proxyBtn && urlInput && statusEl) {
+    proxyBtn.addEventListener('click', () => {
+      const proxyPath = '/ws/voice';
+      urlInput.value = proxyPath;
+      personaplexVoice.serverUrl = proxyPath;
+      savePref('personaplex_url', proxyPath);
+      statusEl.textContent = 'URL set to nginx proxy path — click "Test Connection" to verify.';
+      statusEl.style.color = 'var(--text-secondary,#888)';
     });
   }
 }

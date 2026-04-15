@@ -14,8 +14,16 @@ services:
       - "8080:8080"
     environment:
       SERVER_URL: "http://localhost:8080"
+      # Routes PersonaPlex WebSocket connections through the nginx proxy.
+      # PersonaPlex must be running on the Docker host (see README for setup).
+      PERSONAPLEX_URL: "${PERSONAPLEX_URL:-/ws/voice}"
     depends_on:
       - ai-server
+    extra_hosts:
+      # Maps the 'personaplex' hostname to the Docker host IP so the nginx
+      # container can proxy WebSocket connections to PersonaPlex (port 8998)
+      # running as a Python process on the host machine.  See README for setup.
+      - "personaplex:host-gateway"
     restart: unless-stopped
 
   ai-server:
