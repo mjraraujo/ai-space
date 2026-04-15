@@ -154,6 +154,9 @@ function stampCrossOriginIsolation(response) {
   // If the server already sent the correct isolation headers, return the
   // original response to preserve its native type and avoid a synthetic
   // "default"-type Response that some browsers handle differently.
+  // Accept both "credentialless" and "require-corp" — either enables
+  // crossOriginIsolated.  The fallback below stamps "credentialless"
+  // because it also allows public CDN fetches without CORP headers.
   const coop = response.headers.get('Cross-Origin-Opener-Policy');
   const coep = response.headers.get('Cross-Origin-Embedder-Policy');
   if (coop === 'same-origin' && (coep === 'credentialless' || coep === 'require-corp')) {
