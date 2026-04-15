@@ -145,7 +145,7 @@ function stampCrossOriginIsolation(response) {
   if (!ct.includes('text/html')) return response;
   const headers = new Headers(response.headers);
   headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-  headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
