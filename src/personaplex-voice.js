@@ -109,12 +109,34 @@ export class PersonaPlexVoice {
     if (this.onStateChange) this.onStateChange(s);
   }
 
-  /** Derive the wss:// WebSocket URL from the configured serverUrl. */
+  /** Derive the wss:// WebSocket URL from the configured serverUrl.
+   *
+   * Relative paths (starting with '/') are resolved against the current page
+   * origin, which lets VPS deployments use the nginx proxy path '/ws/voice'
+   * without hard-coding a hostname.
+   *
+   * Examples:
+   *   'https://localhost:8998'  → 'wss://localhost:8998/api/chat'
+   *   'http://localhost:8998'   → 'ws://localhost:8998/api/chat'
+   *   '/ws/voice'               → 'wss://<page-host>/ws/voice/api/chat'
+   */
   _wsUrl() {
-    return this.serverUrl
+    const base = this.serverUrl.replace(/\/+$/, '');
+    // Relative path → resolve against the browser's current origin so the
+    // WebSocket request goes through the nginx proxy on the same host.
+    if (base.startsWith('/')) {
+      const proto =
+        typeof location !== 'undefined' && location.protocol === 'https:'
+          ? 'wss:'
+          : 'ws:';
+      const host =
+        typeof location !== 'undefined' ? location.host : 'localhost';
+      return `${proto}//${host}${base}/api/chat`;
+    }
+    return base
       .replace(/^https:\/\//i, 'wss://')
       .replace(/^http:\/\//i, 'ws://')
-      .replace(/\/+$/, '') + '/api/chat';
+      + '/api/chat';
   }
 
   /**

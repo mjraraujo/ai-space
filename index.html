@@ -3336,15 +3336,21 @@
           <button class="settings-btn" id="voice-preview-btn" style="margin-top:8px;">Preview voice</button>
 
           <div class="settings-row" style="border:none;padding:16px 0 0;">
-            <label class="settings-row-label" for="personaplex-toggle">PersonaPlex voice (local server)</label>
+            <label class="settings-row-label" for="personaplex-toggle">PersonaPlex voice (local server / VPS)</label>
             <label class="toggle-switch">
               <input type="checkbox" id="personaplex-toggle">
               <span class="toggle-slider"></span>
             </label>
           </div>
           <div id="personaplex-settings" style="display:none;">
+            <p style="font-size:12px;color:var(--text-secondary,#888);margin:4px 0 8px;">
+              Full-duplex speech with <strong>NVIDIA PersonaPlex</strong>.
+              <strong>Local:</strong> enter <code>https://localhost:8998</code> and accept the self-signed cert.
+              <strong>VPS / Docker:</strong> use the nginx proxy path below.
+            </p>
             <label class="settings-input-label" style="margin-top:4px;">Server URL</label>
-            <input class="settings-input" id="personaplex-url" type="text" placeholder="https://localhost:8998" value="https://localhost:8998">
+            <input class="settings-input" id="personaplex-url" type="text" placeholder="https://localhost:8998 or /ws/voice" value="https://localhost:8998">
+            <button class="settings-btn" id="personaplex-proxy-btn" style="margin-top:6px;font-size:12px;">⚡ Use nginx proxy (VPS / Docker)</button>
             <label class="settings-input-label" style="margin-top:8px;">Voice Model</label>
             <select class="settings-input" id="personaplex-voice-picker" style="appearance:auto;-webkit-appearance:auto;"></select>
             <label class="settings-input-label" style="margin-top:8px;">Persona Prompt</label>

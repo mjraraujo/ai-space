@@ -214,6 +214,66 @@ describe('PersonaPlexVoice — _wsUrl', () => {
     voice.serverUrl = 'http://host///';
     expect(voice._wsUrl()).toBe('ws://host/api/chat');
   });
+
+  it('resolves relative path to wss:// when page is served over https', () => {
+    const voice = new PersonaPlexVoice();
+    voice.serverUrl = '/ws/voice';
+
+    const origLocation = globalThis.location;
+    Object.defineProperty(globalThis, 'location', {
+      value: { protocol: 'https:', host: 'vps.example.com' },
+      configurable: true,
+      writable: true,
+    });
+
+    expect(voice._wsUrl()).toBe('wss://vps.example.com/ws/voice/api/chat');
+
+    Object.defineProperty(globalThis, 'location', {
+      value: origLocation,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it('resolves relative path to ws:// when page is served over http', () => {
+    const voice = new PersonaPlexVoice();
+    voice.serverUrl = '/ws/voice';
+
+    const origLocation = globalThis.location;
+    Object.defineProperty(globalThis, 'location', {
+      value: { protocol: 'http:', host: 'localhost:8080' },
+      configurable: true,
+      writable: true,
+    });
+
+    expect(voice._wsUrl()).toBe('ws://localhost:8080/ws/voice/api/chat');
+
+    Object.defineProperty(globalThis, 'location', {
+      value: origLocation,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it('strips trailing slashes from a relative path before appending /api/chat', () => {
+    const voice = new PersonaPlexVoice();
+    voice.serverUrl = '/ws/voice/';
+
+    const origLocation = globalThis.location;
+    Object.defineProperty(globalThis, 'location', {
+      value: { protocol: 'https:', host: 'vps.example.com' },
+      configurable: true,
+      writable: true,
+    });
+
+    expect(voice._wsUrl()).toBe('wss://vps.example.com/ws/voice/api/chat');
+
+    Object.defineProperty(globalThis, 'location', {
+      value: origLocation,
+      configurable: true,
+      writable: true,
+    });
+  });
 });
 
 // ─── connect ─────────────────────────────────────────────────────────────────

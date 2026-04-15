@@ -27,6 +27,12 @@ services:
       # Exposed to the browser — must be a URL the *browser* can reach.
       # On a local machine this is typically http://localhost:8080.
       SERVER_URL: "${SERVER_URL:-http://localhost:8080}"
+      # Set PERSONAPLEX_URL to auto-configure the PersonaPlex server URL in the
+      # browser.  If PersonaPlex is running on the Docker host, the nginx proxy
+      # path '/ws/voice' routes the WebSocket through this container without
+      # requiring an open port on the host.  Leave unset to let users configure
+      # it manually in Settings → Voice → PersonaPlex.
+      PERSONAPLEX_URL: "${PERSONAPLEX_URL:-/ws/voice}"
     depends_on:
       ai-server:
         condition: service_healthy
