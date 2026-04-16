@@ -768,6 +768,15 @@ async function tryInitEngine() {
   if (state.mode === 'cloud') return;
 
   try {
+    // Log cross-origin isolation state for WebGPU debugging.
+    if (typeof crossOriginIsolated !== 'undefined' && !crossOriginIsolated) {
+      console.warn(
+        '[AI Space] crossOriginIsolated is false — WebGPU / SharedArrayBuffer may be unavailable. ' +
+        'Ensure the server sends Cross-Origin-Opener-Policy: same-origin and ' +
+        'Cross-Origin-Embedder-Policy: credentialless headers.'
+      );
+    }
+
     const hasWebGPU = await engine.checkWebGPU();
     if (!hasWebGPU) {
       state.mode = 'cloud';

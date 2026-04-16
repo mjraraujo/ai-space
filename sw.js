@@ -136,13 +136,34 @@ async function networkFirst(request, cacheName) {
 }
 
 /**
- * Clone a response and add Cross-Origin-Opener-Policy /
+ * Ensure a navigation response carries the Cross-Origin-Opener-Policy /
  * Cross-Origin-Embedder-Policy headers required for cross-origin isolation.
- * Only applied to same-origin HTML responses; other response types are returned as-is.
+ *
+ * If the server (e.g. nginx in Docker) already set the correct headers we
+ * return the original Response **as-is** so the browser keeps its native
+ * "basic" response type.  Reconstructing via `new Response()` changes the
+ * type to "default" which can prevent browsers from honouring COOP/COEP.
+ *
+ * Only applied to same-origin HTML responses; other response types are
+ * returned untouched.
  */
 function stampCrossOriginIsolation(response) {
   const ct = response.headers.get('content-type') || '';
   if (!ct.includes('text/html')) return response;
+
+  // If the server already sent the correct isolation headers, return the
+  // original response to preserve its native type and avoid a synthetic
+  // "default"-type Response that some browsers handle differently.
+  // Accept both "credentialless" and "require-corp" — either enables
+  // crossOriginIsolated.  The fallback below stamps "credentialless"
+  // because it also allows public CDN fetches without CORP headers.
+  const coop = response.headers.get('Cross-Origin-Opener-Policy');
+  const coep = response.headers.get('Cross-Origin-Embedder-Policy');
+  if (coop === 'same-origin' && (coep === 'credentialless' || coep === 'require-corp')) {
+    return response;
+  }
+
+  // Fallback: stamp the headers ourselves (e.g. plain file-server without headers).
   const headers = new Headers(response.headers);
   headers.set('Cross-Origin-Opener-Policy', 'same-origin');
   headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
