@@ -59,6 +59,24 @@ export class ServerClient {
     }
   }
 
+  /**
+   * Aggregated health snapshot — pings every downstream backend (Ollama,
+   * Whisper, Kokoro, PersonaPlex) via the ai-server's /api/health/full
+   * route.  Returns `null` when the server is not configured.
+   *
+   * @returns {Promise<{ ts: number, gpu: object, backends: object }|null>}
+   */
+  async fullHealth() {
+    if (!this._url) return null;
+    try {
+      const res = await fetch(`${this._url}/api/health/full`, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
   // ── Instance helpers ──────────────────────────────────────────────────────
 
   /** @private */

@@ -20,6 +20,7 @@ import {
   DEFAULT_WEB_LLM_MODEL
 } from './model-adapter.js';
 import { KVEngine } from './kv-engine.js';
+import { getComputeMode, resolveBackend, hasServerClient } from './compute-mode.js';
 
 // ─── Keep legacy MODELS / DEFAULT_MODEL exports for backward compat ──────────
 const DEFAULT_MODEL = DEFAULT_WEB_LLM_MODEL;
@@ -134,9 +135,29 @@ export class AIEngine {
 
   /**
    * Check WebGPU availability.
+   * When the user has explicitly selected compute mode 'server', WebGPU is
+   * reported as unavailable so the engine falls back to the server adapter
+   * without spinning up WebLLM.  Mode 'browser' forces WebGPU detection
+   * regardless of any configured server.
    * @returns {Promise<boolean>}
    */
   async checkWebGPU() {
+    // Respect user-forced compute mode — short-circuit when 'server'.
+    try {
+      const mode = getComputeMode();
+      const backend = resolveBackend({
+        mode,
+        webgpuAvailable: !!(typeof navigator !== 'undefined' && navigator.gpu),
+        serverConfigured: hasServerClient()
+      });
+      if (backend === 'server') {
+        this.webgpuAvailable = false;
+        return false;
+      }
+    } catch {
+      // fall through to native detection on any error
+    }
+
     if (typeof navigator === 'undefined' || !navigator.gpu) {
       this.webgpuAvailable = false;
       return false;

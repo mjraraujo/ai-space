@@ -70,6 +70,44 @@ describe('ServerClient.ping()', () => {
   });
 });
 
+// ─── fullHealth ───────────────────────────────────────────────────────────────
+
+describe('ServerClient.fullHealth()', () => {
+  it('returns null when no URL is configured', async () => {
+    const client = new ServerClient('');
+    expect(await client.fullHealth()).toBe(null);
+  });
+
+  it('returns the aggregated snapshot on success', async () => {
+    const snapshot = {
+      ts: 1,
+      gpu: { gpu: null, tier: 'cpu' },
+      backends: {
+        ollama:      { ok: true,  status: 200, latencyMs: 5 },
+        whisper:     { ok: true,  status: 200, latencyMs: 8 },
+        kokoro:      { ok: false, status: 0,   latencyMs: 2000, error: 'timeout' },
+        personaplex: { ok: false, status: 0,   latencyMs: 2000, error: 'connrefused' }
+      }
+    };
+    globalThis.fetch = mockFetch(200, snapshot);
+    const client = new ServerClient('http://localhost:3000');
+    const result = await client.fullHealth();
+    expect(result).toEqual(snapshot);
+  });
+
+  it('returns null on server error', async () => {
+    globalThis.fetch = mockFetch(500, { error: 'boom' });
+    const client = new ServerClient('http://localhost:3000');
+    expect(await client.fullHealth()).toBe(null);
+  });
+
+  it('returns null on network failure', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('offline'));
+    const client = new ServerClient('http://localhost:3000');
+    expect(await client.fullHealth()).toBe(null);
+  });
+});
+
 // ─── listModels ───────────────────────────────────────────────────────────────
 
 describe('ServerClient.listModels()', () => {
