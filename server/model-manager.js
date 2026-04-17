@@ -26,13 +26,16 @@ export const SERVER_MODEL_CATALOG = [
   { id: 'llama3.3:70b-instruct-q4_K_M', name: 'Llama 3.3 70B', tier: 'large', sizeGb: 42, description: 'State-of-the-art open instruction model at 70B.' },
   { id: 'qwen3:32b',                    name: 'Qwen 3 32B',     tier: 'large', sizeGb: 20, description: 'Alibaba Qwen 3 — excellent multilingual reasoning.' },
   { id: 'gemma3:27b',                   name: 'Gemma 3 27B',    tier: 'large', sizeGb: 17, description: "Google's Gemma 3 at 27B — strong coding + reasoning." },
+  { id: 'gemma4:27b',                   name: 'Gemma 4 27B',    tier: 'large', sizeGb: 17, description: 'Gemma 4 large (preview) — requires an Ollama tag that may not exist yet.', preview: true },
   // ── Medium ────────────────────────────────────────────────────────────────
   { id: 'mistral-small:22b',            name: 'Mistral Small 22B',   tier: 'medium', sizeGb: 13, description: 'Fast and capable at 22B.' },
   { id: 'qwen3:14b',                    name: 'Qwen 3 14B',          tier: 'medium', sizeGb: 9,  description: 'Qwen 3 mid-range — great for long context.' },
   { id: 'gemma3:12b',                   name: 'Gemma 3 12B',         tier: 'medium', sizeGb: 8,  description: 'Gemma 3 compact — balanced quality and speed.' },
+  { id: 'gemma4:12b',                   name: 'Gemma 4 12B',         tier: 'medium', sizeGb: 8,  description: 'Gemma 4 mid-range (preview) — requires an Ollama tag that may not exist yet.', preview: true },
   // ── Small / CPU-capable ───────────────────────────────────────────────────
   { id: 'phi4:3.8b',                    name: 'Phi-4 3.8B',          tier: 'small',  sizeGb: 2.5, description: "Microsoft Phi-4 — best quality under 4B." },
   { id: 'gemma3:4b',                    name: 'Gemma 3 4B',          tier: 'small',  sizeGb: 2.5, description: 'Gemma 3 ultrafast — ideal for constrained hardware.' },
+  { id: 'gemma4:4b',                    name: 'Gemma 4 4B',          tier: 'small',  sizeGb: 2.5, description: 'Gemma 4 small (preview) — requires an Ollama tag that may not exist yet.', preview: true },
   { id: 'qwen3:1.7b',                   name: 'Qwen 3 1.7B',         tier: 'cpu',    sizeGb: 1.1, description: 'Runs entirely on CPU — works without a GPU.' },
   { id: 'llama3.2:1b',                  name: 'Llama 3.2 1B',        tier: 'cpu',    sizeGb: 0.7, description: 'Smallest Llama 3 — ultra-fast CPU inference.' },
 ];

@@ -3,6 +3,10 @@
 # Apply on top of docker-compose.base.yml:
 #   docker compose -f docker-compose.base.yml -f docker-compose.gpu.yml up
 #
+# With PersonaPlex in-container (NVIDIA only):
+#   docker compose -f docker-compose.base.yml -f docker-compose.gpu.yml \
+#                  --profile personaplex up
+#
 # Requires: nvidia-container-toolkit (CUDA) or ROCm runtime (AMD).
 
 services:
@@ -30,6 +34,31 @@ services:
     environment:
       WHISPER__MODEL: large-v3-turbo
       CUDA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Enable GPU in Kokoro-TTS for near-realtime, multi-stream synthesis.
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-gpu:latest
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # PersonaPlex GPU reservation — only applied when the 'personaplex' profile
+  # is active.  PersonaPlex is effectively NVIDIA-only; running it on CPU is
+  # not supported by the upstream project.
+  personaplex:
     deploy:
       resources:
         reservations:

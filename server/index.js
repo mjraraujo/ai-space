@@ -96,6 +96,15 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // ── Aggregated health (ollama / whisper / kokoro / personaplex) ────────
+    if (url === '/api/health/full' || url === '/api/health/full/') {
+      const snapshot = await collectFullHealth(modelManager);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(snapshot));
+      logRequest(req, startMs, 200, reqId);
+      return;
+    }
+
     // ── Route dispatch ────────────────────────────────────────────────────
     if (url.startsWith('/api/models')) {
       await handleModels(req, res, modelManager);
@@ -121,6 +130,48 @@ const server = createServer(async (req, res) => {
 
   logRequest(req, startMs, res.statusCode, reqId);
 });
+
+// ─── Aggregated health ────────────────────────────────────────────────────────
+
+/**
+ * Ping every downstream backend (Ollama, faster-whisper, Kokoro, PersonaPlex)
+ * in parallel and report a compact snapshot.  Each backend is treated as
+ * optional — a failure is reported rather than thrown.
+ *
+ * @param {ModelManager} mm
+ * @returns {Promise<object>}
+ */
+async function collectFullHealth(mm) {
+  const endpoints = {
+    ollama:      { url: `${process.env.OLLAMA_HOST      || 'http://ollama:11434'}/api/tags`,  timeoutMs: 3000 },
+    whisper:     { url: `${process.env.WHISPER_HOST     || 'http://faster-whisper:9000'}/health`, timeoutMs: 3000 },
+    kokoro:      { url: `${process.env.KOKORO_HOST      || 'http://kokoro:8880'}/health`,     timeoutMs: 3000 },
+    personaplex: { url: `${process.env.PERSONAPLEX_HOST || 'http://personaplex:8998'}/`,      timeoutMs: 2000 }
+  };
+
+  const probe = async (entry) => {
+    const started = Date.now();
+    try {
+      const res = await fetch(entry.url, { signal: AbortSignal.timeout(entry.timeoutMs) });
+      return { ok: res.ok, status: res.status, latencyMs: Date.now() - started };
+    } catch (err) {
+      return { ok: false, status: 0, latencyMs: Date.now() - started, error: String(err.message || err) };
+    }
+  };
+
+  const [ollama, whisper, kokoro, personaplex] = await Promise.all([
+    probe(endpoints.ollama),
+    probe(endpoints.whisper),
+    probe(endpoints.kokoro),
+    probe(endpoints.personaplex)
+  ]);
+
+  return {
+    ts: Date.now(),
+    gpu: mm.gpuInfo(),
+    backends: { ollama, whisper, kokoro, personaplex }
+  };
+}
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 

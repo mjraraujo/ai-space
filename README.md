@@ -55,6 +55,38 @@ Serve over HTTPS with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origi
 
 ---
 
+### Docker + server GPU (host huge models locally)
+
+AI Space can also run as a browser + **server-side GPU** stack: the SPA stays a thin client while Ollama, faster-whisper, Kokoro-TTS, and NVIDIA PersonaPlex run in containers next to it. This is how you host 70B-class models, keep them hot in parallel, and drive realtime PersonaPlex voice.
+
+| Mode | Command | What you get |
+|:---|:---|:---|
+| **CPU only** (quickstart) | `docker compose up` | SPA + Ollama + Whisper + Kokoro on CPU. No GPU required. |
+| **CPU + PersonaPlex on host** | `docker compose -f docker-compose.base.yml up` | Full stack; PersonaPlex reached via host-gateway. |
+| **GPU (NVIDIA)** | `docker compose -f docker-compose.base.yml -f docker-compose.gpu.yml up` | Ollama + Whisper + Kokoro on CUDA. |
+| **GPU + PersonaPlex in-container** | `docker compose -f docker-compose.base.yml -f docker-compose.gpu.yml --profile personaplex up` | PersonaPlex voice model runs as a containerised NVIDIA service. Requires `PERSONAPLEX_IMAGE` to be set to an image you have built and pushed (see the comment block in `docker-compose.base.yml` for a minimal recipe). |
+
+Key env vars (override in `.env` or shell):
+
+```bash
+OLLAMA_KEEP_ALIVE=24h          # how long to keep models resident
+OLLAMA_NUM_PARALLEL=4          # concurrent requests per model
+OLLAMA_MAX_LOADED_MODELS=3     # distinct models in VRAM at once
+OLLAMA_FLASH_ATTENTION=1       # flash attention (long context)
+OLLAMA_KV_CACHE_TYPE=q8_0      # q4_0 | q8_0 | f16
+PERSONAPLEX_IMAGE=…            # image for the in-container PersonaPlex
+```
+
+Inside the app, **Settings → Compute** exposes three modes:
+
+- **Auto** — use WebGPU when the device supports it, fall back to the server.
+- **Server GPU** — always route chat, STT, and TTS through the Docker stack.
+- **Browser WebGPU** — force the in-browser path, ignore any server.
+
+And four **Accelerator presets** (eco / balanced / turbo / **quantum**) that pick a KV compression strategy (including the quantum-compress dedup strategy), a compute mode, and the Ollama tuning knobs above as a single coherent preset — "supercomputer mode on little hardware".
+
+---
+
 ### Models
 
 | Model | Size | Speed (iPhone 15 Pro) | Best for |

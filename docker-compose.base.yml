@@ -3,15 +3,21 @@
 # Includes:
 #   nginx        — SPA + reverse proxy (port 8080)
 #   ai-server    — Node.js API server (models, chat, KV, voice)
-#   ollama       — Local LLM inference server
+#   ollama       — Local LLM inference server (tuned for many large models
+#                  kept hot in parallel — see OLLAMA_* env vars below)
 #   faster-whisper — Speech-to-text (CPU mode)
-#   kokoro        — Text-to-speech (CPU mode, Kokoro-TTS)
+#   kokoro       — Text-to-speech (CPU mode, Kokoro-TTS)
+#   personaplex  — NVIDIA PersonaPlex full-duplex voice model (opt-in via
+#                  the "personaplex" profile; GPU-only in practice — see
+#                  docker-compose.gpu.yml).  When disabled, nginx falls back
+#                  to routing /ws/voice to a PersonaPlex instance running on
+#                  the Docker host via host-gateway.
 #
 # Usage:
-#   docker compose -f docker-compose.base.yml up
-#
-# For GPU acceleration overlay:
-#   docker compose -f docker-compose.base.yml -f docker-compose.gpu.yml up
+#   CPU-only:                     docker compose -f docker-compose.base.yml up
+#   CPU-only + PersonaPlex:       docker compose -f docker-compose.base.yml --profile personaplex up
+#   GPU overlay:                  docker compose -f docker-compose.base.yml -f docker-compose.gpu.yml up
+#   GPU overlay + PersonaPlex:    docker compose -f docker-compose.base.yml -f docker-compose.gpu.yml --profile personaplex up
 
 services:
 
@@ -60,6 +66,10 @@ services:
       OLLAMA_HOST:   "http://ollama:11434"
       WHISPER_HOST:  "http://faster-whisper:9000"
       KOKORO_HOST:   "http://kokoro:8880"
+      # Used by /api/health/full to probe PersonaPlex.  Default assumes the
+      # in-container 'personaplex' service (if the profile is enabled) or
+      # falls back to the host-gateway shortcut.
+      PERSONAPLEX_HOST: "${PERSONAPLEX_HOST:-http://personaplex:8998}"
       KV_CACHE_DIR:  /data/kv-cache
       KV_MAX_SLOTS:  "64"
     volumes:
@@ -80,11 +90,28 @@ services:
   # ── Ollama — local LLM inference ────────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
+    environment:
+      # ── Big-model / parallelism tuning ────────────────────────────────────
+      # Keep models resident for 24 h so cold-starts are rare when juggling
+      # several large LLMs.  Override to '0' to evict immediately.
+      OLLAMA_KEEP_ALIVE:        "${OLLAMA_KEEP_ALIVE:-24h}"
+      # Serve multiple requests concurrently against the same model.
+      OLLAMA_NUM_PARALLEL:      "${OLLAMA_NUM_PARALLEL:-4}"
+      # Allow N distinct models to be held in VRAM at once (parallel personas).
+      OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-3}"
+      # Flash-attention dramatically reduces KV memory for long context.
+      OLLAMA_FLASH_ATTENTION:   "${OLLAMA_FLASH_ATTENTION:-1}"
+      # Quantise the KV cache (q4_0 / q8_0 / f16).  q8_0 is a good default —
+      # ~2× longer context with negligible quality loss on GPU.
+      OLLAMA_KV_CACHE_TYPE:     "${OLLAMA_KV_CACHE_TYPE:-q8_0}"
     volumes:
       - ollama-data:/root/.ollama
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    # Larger shared-memory region helps the CUDA allocator and NCCL with
+    # 70B-class models; harmless on CPU.
+    shm_size: "2gb"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
       interval: 20s
@@ -112,6 +139,8 @@ services:
   # ── Kokoro-TTS — server-side text-to-speech (CPU) ───────────────────────────
   kokoro:
     image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    volumes:
+      - model-store:/root/.cache/huggingface
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -121,6 +150,44 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+
+  # ── PersonaPlex — NVIDIA full-duplex voice model (opt-in) ───────────────────
+  # Profile-gated so CPU-only deployments don't try to start it.  In practice
+  # this service requires a CUDA GPU — combine with docker-compose.gpu.yml.
+  #
+  # There is no official published image for PersonaPlex (moshi) today, so
+  # PERSONAPLEX_IMAGE must point at an image *you* build and push.  A minimal
+  # recipe:
+  #   FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+  #   RUN pip install moshi
+  #   CMD ["python","-m","moshi.server","--host","0.0.0.0","--port","8998"]
+  # Then: docker build -t my/personaplex . ; export PERSONAPLEX_IMAGE=my/personaplex
+  #
+  # When the profile is NOT active, the nginx upstream still resolves
+  # 'personaplex' to the Docker host via the 'host-gateway' entry — i.e. the
+  # legacy setup where PersonaPlex runs as a Python process outside Docker.
+  personaplex:
+    image: "${PERSONAPLEX_IMAGE:-ghcr.io/mjraraujo/personaplex:latest}"
+    profiles: ["personaplex"]
+    environment:
+      PERSONAPLEX_VOICE:  "${PERSONAPLEX_VOICE:-NATF0}"
+      PERSONAPLEX_PERSONA: "${PERSONAPLEX_PERSONA:-You enjoy having a good conversation.}"
+      HF_HOME:            /root/.cache/huggingface
+    volumes:
+      - model-store:/root/.cache/huggingface
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # PersonaPlex needs a lot of shared memory for the moshi audio pipeline.
+    shm_size: "2gb"
+    healthcheck:
+      # moshi listens on 8998 but does not expose a /health route.  A TCP
+      # check is sufficient to know the container is ready to accept WS.
+      test: ["CMD-SHELL", "nc -z localhost 8998 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
 
 volumes:
   ollama-data:
